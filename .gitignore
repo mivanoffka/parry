@@ -1,0 +1,53 @@
+# Unity-generated caches, local settings and build output
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Bb]uild/
+/[Bb]uilds/
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+
+# Unity-generated IDE projects (keep hand-written test projects)
+/*.csproj
+/*.sln
+/*.slnx
+/*.unityproj
+/*.pidb
+/*.booproj
+/*.svd
+/*.pdb
+/*.mdb
+/*.opendb
+/*.VC.db
+/.vs/
+/.idea/
+/.vscode/
+*.user
+*.suo
+*.userprefs
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+
+# .NET test outputs and Python tooling caches
+**/bin/
+**/obj/
+**/TestResults/
+**/__pycache__/
+*.pyc
+
+# Unity crash reports, exported packages and platform builds
+/sysinfo.txt
+/mono_crash.*
+*.unitypackage
+*.apk
+*.aab
+*.app/
+
+# Operating system files
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
