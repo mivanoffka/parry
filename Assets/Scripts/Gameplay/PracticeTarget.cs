@@ -11,6 +11,7 @@ namespace Parry
         public static int Hits { get; private set; }
         public bool IsAlive => health > 0;
         public int Health => health;
+        public CombatHitbox Hitbox { get; private set; }
         public int MaxHealth => maxHealth;
         public float LastHitTime { get; private set; } = float.NegativeInfinity;
         int health;
@@ -31,8 +32,9 @@ namespace Parry
             health = maxHealth;
             home = transform.position;
             visual = GetComponentInChildren<SpriteRenderer>();
-            baseColor = visual.color;
+            baseColor = visual != null ? visual.color : Color.white;
             hitbox = GetComponent<CapsuleCollider>();
+            Hitbox = gameObject.AddComponent<CombatHitbox>();
             healthBar = DemoArt.Line("Health", transform, new Color(.9f, .4f, .3f), .065f);
             healthBar.positionCount = 2;
         }
@@ -55,10 +57,11 @@ namespace Parry
             knockback = Vector3.ProjectOnPlane(direction, Vector3.up).normalized * hitKnockback;
             if (health == 0)
             {
-                if (GetComponent<EnemyBrain>() != null)
+                if (visual != null && GetComponent<EnemyBrain>() != null)
                     EnemyCorpse.Create(visual, baseColor, transform.position, direction, transform.parent);
                 respawnAt = Time.time + respawnDelay;
-                visual.enabled = hitbox.enabled = healthBar.enabled = false;
+                if (visual != null) visual.enabled = false;
+                hitbox.enabled = healthBar.enabled = false;
             }
         }
         void Update()
@@ -69,14 +72,18 @@ namespace Parry
                 health = maxHealth;
                 transform.position = home;
                 knockback = Vector3.zero;
-                visual.enabled = hitbox.enabled = healthBar.enabled = true;
+                if (visual != null) visual.enabled = true;
+                hitbox.enabled = healthBar.enabled = true;
             }
             Vector3 displacement = knockback * Time.deltaTime;
             if (displacement.sqrMagnitude > 0) Move(displacement);
             knockback = Vector3.MoveTowards(knockback, Vector3.zero, 18 * Time.deltaTime);
             flash -= Time.deltaTime;
-            visual.color = flash > 0 ? Color.white : baseColor;
-            visual.transform.rotation = Camera.main.transform.rotation;
+            if (visual != null)
+            {
+                visual.color = flash > 0 ? Color.white : baseColor;
+                visual.transform.rotation = Camera.main.transform.rotation;
+            }
             healthBar.SetPosition(0, transform.position + new Vector3(-.4f, 1.8f, 0));
             healthBar.SetPosition(1, transform.position + new Vector3(-.4f + .8f * health / maxHealth, 1.8f, 0));
         }

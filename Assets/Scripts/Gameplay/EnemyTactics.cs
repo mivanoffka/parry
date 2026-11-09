@@ -19,7 +19,7 @@ namespace Parry
         float retreatUntil, reengageUntil, recentGain, lastPressure, lastUpdate;
         bool sampled;
 
-        public void Update(float pressure, float now, float fatigue = 0, int endurance = 100,
+        public void Update(float pressure, float now, int endurance = 100,
             bool threatened = false, bool opening = false, float opponentPressure = 0, bool opponentDisrupted = false)
         {
             float elapsed = sampled ? Math.Max(0, now - lastUpdate) : 0;
@@ -36,15 +36,14 @@ namespace Parry
                 Aggressive = true;
                 return;
             }
-            float fatigueRisk = Math.Min(12, Math.Max(0, fatigue) * 2);
             float reserve = 100f / Math.Max(1, endurance);
-            float entry = RetreatThreshold - fatigueRisk - Math.Min(10, recentGain * .4f);
-            float exit = ReengageThreshold - fatigueRisk * .5f;
+            float entry = RetreatThreshold - Math.Min(10, recentGain * .4f);
+            float exit = ReengageThreshold;
             // Keep enough concentration for an ordinary block, or the penalty for a parried attack.
             UrgentRetreat = pressure >= 90 || (threatened && pressure + 28 * reserve >= 95);
             bool vulnerable = pressure >= entry || (pressure >= 60 && pressure + 45 * reserve >= 100);
             bool canExploitOpening = opening && !threatened && pressure < 75
-                && pressure + 45 * reserve < 90 && fatigue < 4;
+                && pressure + 45 * reserve < 90;
 
             if (Retreating)
             {
@@ -56,7 +55,7 @@ namespace Parry
                 Retreating = true;
                 retreatUntil = now + MinimumRetreatDuration;
             }
-            Aggressive = !Retreating && !UrgentRetreat && pressure <= AggressiveThreshold - fatigueRisk;
+            Aggressive = !Retreating && !UrgentRetreat && pressure <= AggressiveThreshold;
         }
 
         public void Reengage(float pressure, float now)

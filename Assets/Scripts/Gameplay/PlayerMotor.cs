@@ -14,20 +14,23 @@ namespace Parry
         [SerializeField] float rollSpeed = 15f;
         [SerializeField] float rollDuration = .23f;
         [SerializeField] float rollCooldown = .6f;
-        [SerializeField] float rollPressure = 20f;
+        [SerializeField] float rollPressure = 50f;
+        [SerializeField, Min(0)] float rollChainPressureIncrement = 25f;
+        [SerializeField, Min(0)] float rollChainResetDelay = 2f;
         [Header("Melee")]
-        [SerializeField] float windup = .28f;
-        [SerializeField] float activeTime = .12f;
-        [SerializeField] float recovery = .2f;
+        [SerializeField] float windup = .21f;
+        [SerializeField] float activeTime = .09f;
+        [SerializeField] float recovery = .12f;
         [SerializeField] float reach = 2.5f;
         [SerializeField, Range(1, 180)] float halfAngle = 35f;
         [SerializeField] int damage = 1;
         [Header("Special attack: lunge")]
         [SerializeField, Min(0)] float preparationPressurePerSecond = 5f;
         [SerializeField, Min(0)] float strongAttackPressure = 195f;
-        [SerializeField] float lungeWindup = .65f;
-        [SerializeField] float lungeActiveTime = .16f;
-        [SerializeField] float lungeRecovery = .5f;
+        [SerializeField] float lungeWindup = .9f;
+        [SerializeField, Min(1)] float preparedRunSpeedMultiplier = 1.5f;
+        [SerializeField] float lungeActiveTime = .12f;
+        [SerializeField] float lungeRecovery = .32f;
         [SerializeField] float lungeDistance = 1.4f;
         [SerializeField] float lungeWidth = .3f;
         [Header("Survival")]
@@ -39,17 +42,22 @@ namespace Parry
         public int MaxHealth => maxHealth;
         public bool IsAlive => Health > 0;
         public CombatGuard Guard { get; private set; }
+        public CombatHitbox Hitbox { get; private set; }
         public Vector3 Facing { get; private set; } = Vector3.back;
         public bool Rolling => rollRemaining > 0;
         public bool Attacking => attackRemaining > 0;
+        float attackStartedAt;
+        public AttackPhase ClashPhase => PreparingPowerfulAttack ? AttackPhase.Windup : !Attacking ? AttackPhase.None
+            : AttackClashRules.Phase(Time.time - attackStartedAt, CurrentWindup, CurrentActive, CurrentRecovery);
+        public Vector3 AttackFacing => Attacking ? attackDirection : Facing;
         public bool PreparingPowerfulAttack => !Attacking && Style == WeaponStyle.Thrusting && preparation.Active;
         public bool UnblockableThreat => UnblockableAttack || PreparingPowerfulAttack;
-        public bool AttackThreatening => attackRemaining > CurrentRecovery || PreparingPowerfulAttack;
+        public bool AttackThreatening => Attacking && attackRemaining > CurrentRecovery;
         public WeaponStyle Style { get; private set; } = WeaponStyle.Normal;
         bool ThrustAttack => activeAttack == AttackChoice.Thrust || activeAttack == AttackChoice.Lunge;
         public bool UnblockableAttack => Attacking && activeAttack == AttackChoice.Lunge;
         public float AttackReach => arena != null ? arena.BaseAttackRadius : reach;
-        public float ThreatReach => CurrentReach + (UnblockableThreat ? lungeDistance : 0);
+        public float ThreatReach => CurrentReach + (UnblockableAttack ? lungeDistance : 0);
         float CurrentWindup => activeAttack == AttackChoice.Lunge ? 0 : windup;
         float CurrentActive => activeAttack == AttackChoice.Lunge ? lungeActiveTime : activeTime;
         float CurrentRecovery => activeAttack == AttackChoice.Lunge ? lungeRecovery : recovery;
@@ -68,6 +76,7 @@ namespace Parry
         bool swingSoundPlayed;
         AttackChoice activeAttack, bufferedAttack;
         Vector3 selectedDirection, bufferedDirection;
+        readonly RollSequence rollSequence = new RollSequence();
         readonly AttackPreparation preparation = new AttackPreparation();
         readonly SpecialAttackSelector attackSelector = new SpecialAttackSelector();
 
@@ -90,6 +99,7 @@ namespace Parry
             Guard = GetComponent<CombatGuard>();
             Guard.State.ConfigureEndurance(endurance);
             Health = maxHealth;
+            Hitbox = gameObject.AddComponent<CombatHitbox>();
             view = Camera.main;
             visual = GetComponentInChildren<SpriteRenderer>();
             slash = DemoArt.Line("Sword arc", transform, new Color(1, .85f, .5f), .1f);
@@ -113,7 +123,10 @@ namespace Parry
                 if (nextStyle != Style)
                 {
                     Style = nextStyle;
-                    if (Style == WeaponStyle.Thrusting) preparation.Begin(Time.time);
+                    if (Style == WeaponStyle.Thrusting)
+                    {
+                        preparation.Begin(Time.time);
+                    }
                     else preparation.Cancel();
                     attackSelector.Cancel();
                     buffered = false;
@@ -204,10 +217,12 @@ namespace Parry
                     || Guard.State.TrySpendForStrongAttack(strongAttackPressure, Time.time))
                 {
                     activeAttack = bufferedAttack;
+                    attackStartedAt = Time.time;
                     preparation.Cancel();
                     attackRemaining = CurrentWindup + CurrentActive + CurrentRecovery;
                     attackDirection = bufferedDirection;
                     Facing = attackDirection;
+                    Guard.AnnounceAttack(CurrentWindup, ThreatReach);
                     Guard.State.RecordCombat(Time.time);
                     hit.Clear();
                     swingSoundPlayed = false;
@@ -222,7 +237,10 @@ namespace Parry
             }
             else
             {
-                velocity = Vector3.MoveTowards(velocity, move * speed * (UnblockableAttack ? 0 : Attacking ? .25f : Guard.Blocking ? .45f : attackSelector.Holding ? .4f : 1), acceleration * dt);
+                bool readyToLunge = PreparingPowerfulAttack && preparation.Ready(Time.time, lungeWindup);
+                float movementMultiplier = UnblockableAttack ? 0 : Attacking ? .25f : Guard.Blocking ? .45f
+                    : attackSelector.Holding ? .4f : readyToLunge ? preparedRunSpeedMultiplier : 1;
+                velocity = Vector3.MoveTowards(velocity, move * speed * movementMultiplier, acceleration * dt);
                 controller.Move((velocity + Vector3.down * 2) * dt);
             }
             controller.Move(knockback * dt);
@@ -303,7 +321,8 @@ namespace Parry
         public bool TryRoll(Vector3 direction)
         {
             if (!IsAlive || Rolling || Attacking || Time.time < nextRoll
-                || !Guard.State.TrySpendForRoll(rollPressure, Time.time)) return false;
+                || !rollSequence.TrySpend(Guard.State, Time.time, rollDuration, rollPressure,
+                    rollChainPressureIncrement, rollChainResetDelay)) return false;
             rollRemaining = rollDuration;
             nextRoll = Time.time + rollCooldown;
             direction = Vector3.ProjectOnPlane(direction, Vector3.up);
@@ -321,6 +340,8 @@ namespace Parry
             attackSelector.Cancel();
         }
 
+        public void InterruptAttack() => CancelAttack();
+
         void CancelAttack()
         {
             Guard.State.CompleteStrongAttack(Time.time);
@@ -332,7 +353,9 @@ namespace Parry
 
         public void ReceiveAttack(int amount, Vector3 direction, CombatGuard attacker)
         {
-            if (!IsAlive || Rolling || Time.time < invulnerableUntil) return;
+            if (!IsAlive) return;
+            if (Guard.TryClash(attacker, direction)) return;
+            if (Time.time < invulnerableUntil) return;
             if (Guard.Defend(attacker, direction) != DefenseResult.Hit)
             {
                 if (Guard.Disrupted) CancelAttack();
@@ -343,12 +366,13 @@ namespace Parry
 
         public bool TakeHit(int amount, Vector3 direction)
         {
-            if (!IsAlive || Rolling || Time.time < invulnerableUntil || amount <= 0) return false;
+            if (!IsAlive || Time.time < invulnerableUntil || amount <= 0) return false;
             Health = Mathf.Max(0, Health - amount);
             CombatAudio.Play(IsAlive ? CombatSound.Hit : CombatSound.Death, transform.position);
             blood.Burst(transform.position + Vector3.up * .8f, direction);
             invulnerableUntil = Time.time + hurtInvulnerability;
             knockback = Vector3.ProjectOnPlane(direction, Vector3.up).normalized * 6;
+            rollRemaining = 0;
             CancelAttack();
             if (!IsAlive)
             {
@@ -372,6 +396,7 @@ namespace Parry
             activeAttack = AttackChoice.None;
             attackSelector.Cancel();
             nextRoll = 0;
+            rollSequence.Reset();
             buffered = false;
             hit.Clear();
             invulnerableUntil = Time.time + 1;
@@ -394,17 +419,10 @@ namespace Parry
                 var target = overlaps[i].GetComponentInParent<PracticeTarget>();
                 if (target == null || !target.IsAlive || hit.Contains(target)) continue;
                 var enemy = target.GetComponent<EnemyBrain>();
-                // Invulnerability does not consume this swing's one accepted contact.
-                // If the roll ends during the active window, the weapon can still connect.
-                if (enemy != null && enemy.Rolling) continue;
                 Vector3 delta = Vector3.ProjectOnPlane(target.transform.position - transform.position, Vector3.up);
-                if (ThrustAttack)
-                {
-                    float along = Vector3.Dot(delta, attackDirection);
-                    float width = lungeWidth + .35f;
-                    if (along < 0 || along > CurrentReach || (delta - attackDirection * along).sqrMagnitude > width * width) continue;
-                }
-                else if (delta.magnitude > CurrentReach + .3f || (!CircularStrike && delta.sqrMagnitude > .001f && Vector3.Angle(attackDirection, delta) > halfAngle)) continue;
+                if (!target.Hitbox.IntersectsAttack(transform.position + Vector3.up * .8f,
+                    attackDirection, CurrentReach, halfAngle, CircularStrike, ThrustAttack,
+                    ThrustAttack ? lungeWidth : .12f)) continue;
                 // Walls block attacks. Target colliders are triggers and ignored by this ray.
                 if (Physics.Raycast(transform.position + Vector3.up * .65f, delta.normalized, delta.magnitude, ~0, QueryTriggerInteraction.Ignore)) continue;
                 hit.Add(target);

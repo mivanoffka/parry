@@ -20,12 +20,83 @@ namespace Parry
         LineRenderer bar, background, flash;
         ParrySparks sparks;
         bool wasBroken;
+        CombatGuard lastClashWith;
+        int lastClashFrame = -1;
+        AttackPhase ClashPhase
+        {
+            get
+            {
+                var player = GetComponent<PlayerMotor>();
+                if (player != null) return player.ClashPhase;
+                var enemy = GetComponent<EnemyBrain>();
+                return enemy != null ? enemy.ClashPhase : AttackPhase.None;
+            }
+        }
+        Vector3 AttackFacing
+        {
+            get
+            {
+                var player = GetComponent<PlayerMotor>();
+                if (player != null) return player.AttackFacing;
+                var enemy = GetComponent<EnemyBrain>();
+                return enemy != null ? enemy.AttackFacing : Facing;
+            }
+        }
+        bool Powerful => GetComponent<PlayerMotor>() is PlayerMotor player && player.UnblockableThreat;
+        readonly Collider[] nearbyDefenders = new Collider[64];
         public void SetFacing(Vector3 facing) => Facing = facing;
         public void Tick(bool wantsBlock, Vector3 facing)
         {
             Facing = facing;
             State.SetBlocking(wantsBlock, Time.time);
             State.Tick(Time.deltaTime, Time.time);
+        }
+        public void AnnounceAttack(float windup, float reach)
+        {
+            Vector3 origin = transform.position + Vector3.up * .65f;
+            int count = Physics.OverlapSphereNonAlloc(origin, reach + .5f, nearbyDefenders, ~0, QueryTriggerInteraction.Collide);
+            for (int i = 0; i < count; i++)
+            {
+                var defender = nearbyDefenders[i].GetComponentInParent<CombatGuard>();
+                if (defender == null || defender == this) continue;
+                Vector3 delta = defender.transform.position + Vector3.up * .65f - origin;
+                if (Physics.Raycast(origin, delta.normalized, out RaycastHit obstacle, delta.magnitude,
+                    ~0, QueryTriggerInteraction.Ignore) && obstacle.collider.GetComponentInParent<CombatGuard>() != defender) continue;
+                defender.State.AnticipateAttack(Time.time, windup);
+            }
+        }
+        public bool TryClash(CombatGuard attacker, Vector3 incomingDirection, bool powerful = false)
+        {
+            if (attacker == null || attacker == this) return false;
+            // Resolving the pair interrupts both attacks immediately; a second callback cannot deal damage.
+            if (lastClashFrame == Time.frameCount && lastClashWith == attacker) return true;
+            if (Disrupted || attacker.Disrupted || Vector3.Angle(AttackFacing, -incomingDirection) > 70) return false;
+            AttackClash clash = AttackClashRules.Resolve(ClashPhase, attacker.ClashPhase);
+            if (clash == AttackClash.None) return false;
+            lastClashWith = attacker; lastClashFrame = Time.frameCount;
+            attacker.lastClashWith = this; attacker.lastClashFrame = Time.frameCount;
+            bool parry = clash == AttackClash.Parry;
+            bool ownPowerful = Powerful;
+            State.AddPressure(powerful ? 80 : parry ? 45 : 28, Time.time);
+            attacker.State.AddPressure(ownPowerful ? 80 : parry ? 45 : 28, Time.time);
+            State.Deflect(Time.time); attacker.State.Deflect(Time.time);
+            State.Recoil(Time.time); attacker.State.Recoil(Time.time);
+            float push = powerful || ownPowerful ? 12 : parry ? 7 : 5;
+            Push(incomingDirection, push); attacker.Push(-incomingDirection, push);
+            InterruptAttack(); attacker.InterruptAttack();
+            Signal(parry ? "PARRY CLASH!" : "BLOCK CLASH", parry);
+            attacker.Signal(parry ? "PARRY CLASH!" : "BLOCK CLASH", parry);
+            CombatAudio.Play(parry ? CombatSound.Parry : CombatSound.Block, transform.position);
+            sparks.Burst((transform.position + attacker.transform.position) * .5f + Vector3.up * .8f,
+                incomingDirection, parry);
+            return true;
+        }
+        void InterruptAttack()
+        {
+            var player = GetComponent<PlayerMotor>();
+            if (player != null) player.InterruptAttack();
+            var enemy = GetComponent<EnemyBrain>();
+            if (enemy != null) enemy.InterruptAttack();
         }
         public DefenseResult Defend(CombatGuard attacker, Vector3 incomingDirection, bool allowParry = true, bool powerful = false)
         {
@@ -74,7 +145,11 @@ namespace Parry
             if (player != null) player.Push(direction, speed);
         }
         public void OnHit() { State.AddPressure(22, Time.time); }
-        public void ResetCombat() { State.Reset(); feedbackUntil = 0; wasBroken = false; }
+        public void ResetCombat()
+        {
+            State.Reset(); feedbackUntil = 0; wasBroken = false;
+            lastClashWith = null; lastClashFrame = -1;
+        }
         void Awake()
         {
             sparks = gameObject.AddComponent<ParrySparks>();

@@ -3244,9 +3244,9 @@ MonoBehaviour:
   moveSpeed: 4.2
   attackDistance: 2.1
   stunDuration: 0.23
-  windup: 0.32
-  recovery: 0.8
-  attackInterval: 1
+  windup: 0.24
+  recovery: 0.5
+  attackInterval: 0.65
   reach: 2.5
   halfAngle: 35
   damage: 1
@@ -5183,17 +5183,17 @@ MonoBehaviour:
   rollSpeed: 15
   rollDuration: 0.23
   rollCooldown: 0.6
-  rollPressure: 20
-  windup: 0.28
-  activeTime: 0.12
-  recovery: 0.2
+  rollPressure: 50
+  windup: 0.21
+  activeTime: 0.09
+  recovery: 0.12
   reach: 2.5
   halfAngle: 35
   damage: 1
   strongAttackPressure: 195
-  lungeWindup: 0.65
-  lungeActiveTime: 0.16
-  lungeRecovery: 0.5
+  lungeWindup: 0.9
+  lungeActiveTime: 0.12
+  lungeRecovery: 0.32
   lungeDistance: 1.4
   lungeWidth: 0.3
   maxHealth: 2

@@ -15,9 +15,9 @@ namespace Parry
         [SerializeField] float attackDistance = 2.1f;
         [SerializeField] float stunDuration = .23f;
         [Header("Attack")]
-        [SerializeField] float windup = .32f;
-        [SerializeField] float recovery = .8f;
-        [SerializeField] float attackInterval = 1f;
+        [SerializeField] float windup = .24f;
+        [SerializeField] float recovery = .5f;
+        [SerializeField] float attackInterval = .65f;
         [SerializeField] float reach = 2.5f;
         [SerializeField, Range(1, 180)] float halfAngle = 35;
         [SerializeField] int damage = 1;
@@ -45,12 +45,29 @@ namespace Parry
         bool TargetAlive => opponent != null ? opponent.Health.IsAlive : player != null && player.IsAlive;
         bool TargetThreatening => opponent != null ? opponent.AttackThreatening : player != null && player.AttackThreatening;
         float TargetReach => opponent != null ? opponent.AttackReach : player != null ? player.ThreatReach : 0;
-        bool TargetUnblockable => player != null && player.UnblockableThreat && player.AttackThreatening;
+        bool TargetUnblockable => player != null && player.UnblockableAttack && player.AttackThreatening;
         CombatGuard TargetGuard => opponent != null ? opponent.Guard : player.Guard;
+        public AttackPhase ClashPhase => !health.IsAlive ? AttackPhase.None
+            : state == State.Windup ? (Time.time < stateUntil ? AttackPhase.Windup : AttackPhase.Active)
+            : state == State.Recovery && Time.time >= lastSwingAt && Time.time - lastSwingAt < .1f
+                ? AttackPhase.Active : AttackPhase.None;
+        public Vector3 AttackFacing => facing;
+        public void InterruptAttack()
+        {
+            state = State.Recovery;
+            stateUntil = Time.time + .35f;
+            lastSwingAt = float.NegativeInfinity;
+            comboRemaining = 0;
+            warning.enabled = false;
+            Guard.State.SetBlocking(false, Time.time);
+        }
         public bool AttackThreatening => health.IsAlive && state == State.Windup && !Guard.Disrupted;
         public void Initialize(EnemyBrain target) { opponent = target; player = null; }
         void AttackTarget(int amount, Vector3 direction)
         {
+            CombatHitbox hitbox = opponent != null ? opponent.Health.Hitbox : player != null ? player.Hitbox : null;
+            if (hitbox == null || !hitbox.IntersectsAttack(transform.position + Vector3.up * .8f,
+                facing, AttackReach, halfAngle, CircularAttacks)) return;
             if (opponent != null) opponent.ReceiveAttack(amount, direction, Guard);
             else if (player != null) player.ReceiveAttack(amount, direction, Guard);
         }
@@ -234,8 +251,7 @@ namespace Parry
                     lastSwingAt = Time.time;
                     CombatAudio.Play(CombatSound.Swing, transform.position);
                     nextAttackAt = Time.time + attackInterval;
-                    if (delta.magnitude <= AttackReach && (CircularAttacks || delta.sqrMagnitude < .001f || Vector3.Angle(facing, delta) <= halfAngle)
-                        && HasLineOfSight(delta))
+                    if (HasLineOfSight(delta))
                         AttackTarget(damage, CircularAttacks && delta.sqrMagnitude > .001f ? delta.normalized : facing);
                     state = State.Recovery;
                     stateUntil = Time.time + (tactics.Aggressive ? recovery * .75f : recovery);
@@ -258,7 +274,7 @@ namespace Parry
             bool seesTarget = HasLineOfSight(delta);
             bool threatened = TargetThreatening && delta.magnitude <= TargetReach + .5f && seesTarget;
             bool opening = TargetGuard.Disrupted && delta.magnitude <= AttackReach && seesTarget;
-            tactics.Update(Guard.Pressure, Time.time, Guard.State.Fatigue, Guard.EndurancePoints, threatened, opening,
+            tactics.Update(Guard.Pressure, Time.time, Guard.EndurancePoints, threatened, opening,
                 seesTarget ? TargetGuard.Pressure : 0, seesTarget && TargetGuard.Disrupted);
         }
 
@@ -272,6 +288,7 @@ namespace Parry
             }
             state = State.Windup;
             stateUntil = Time.time + windup;
+            Guard.AnnounceAttack(windup, AttackReach);
             Guard.State.RecordCombat(Time.time);
             Vector3 delta = Vector3.ProjectOnPlane(TargetTransform.position - transform.position, Vector3.up);
             if (delta.sqrMagnitude > .001f) facing = delta.normalized;
@@ -401,7 +418,8 @@ namespace Parry
 
         public void ReceiveAttack(int damage, Vector3 direction, CombatGuard attacker, bool unblockable = false)
         {
-            if (!health.IsAlive || Rolling) return;
+            if (!health.IsAlive) return;
+            if (Guard.TryClash(attacker, direction, unblockable)) return;
             bool newAttack = TargetThreatening && !observedPlayerAttack;
             if (TargetThreatening) observedPlayerAttack = true;
             PrepareDefense(-direction, newAttack);
@@ -428,8 +446,8 @@ namespace Parry
             float prepare = state == State.Windup ? 1 - Mathf.Clamp01((stateUntil - Time.time) / windup) : 0;
             float recoveryDuration = tactics.Aggressive ? recovery * .75f : recovery;
             float swing = state == State.Recovery && Time.time - lastSwingAt < recoveryDuration
-                ? Mathf.Clamp01((Time.time - lastSwingAt) / .16f) : -1;
-            float returnToReady = Mathf.Clamp01((Time.time - lastSwingAt - .16f) / Mathf.Max(.01f, recoveryDuration - .16f));
+                ? Mathf.Clamp01((Time.time - lastSwingAt) / .1f) : -1;
+            float returnToReady = Mathf.Clamp01((Time.time - lastSwingAt - .1f) / Mathf.Max(.01f, recoveryDuration - .1f));
             weapon.Pose(facing, health.IsAlive && !Rolling, Guard.Blocking, Guard.Disrupted, swing, prepare,
                 AttackReach, halfAngle, returnToReady, CircularAttacks);
             if (!health.IsAlive || visual == null) return;

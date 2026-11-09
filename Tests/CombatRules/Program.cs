@@ -9,6 +9,22 @@ void Check(bool condition, string description)
 }
 void Near(float actual, float expected, string description) => Check(Math.Abs(actual - expected) < .01f, description);
 
+foreach (AttackPhase first in Enum.GetValues<AttackPhase>())
+foreach (AttackPhase second in Enum.GetValues<AttackPhase>())
+{
+    var clash = AttackClashRules.Resolve(first, second);
+    Check(clash == AttackClashRules.Resolve(second, first), "Clash outcome is independent of attack processing order");
+    if (first == AttackPhase.Active && second == AttackPhase.Active)
+        Check(clash == AttackClash.Parry, "Synchronized active strikes mutually parry");
+    else if ((first == AttackPhase.Windup && second == AttackPhase.Active)
+        || (second == AttackPhase.Windup && first == AttackPhase.Active))
+        Check(clash == AttackClash.Block, "An active strike meeting a windup results in a block");
+    else Check(clash == AttackClash.None, "Idle, recovery and two windups cannot generate a clash");
+}
+Check(AttackClashRules.Phase(.2f, .21f, .09f, .12f) == AttackPhase.Windup, "Damage-free anticipation remains windup");
+Check(AttackClashRules.Phase(.21f, .21f, .09f, .12f) == AttackPhase.Active, "A strike is active at the windup boundary");
+Check(AttackClashRules.Phase(.31f, .21f, .09f, .12f) == AttackPhase.Recovery, "Recovery cannot parry by attacking");
+
 var defender = new PostureState();
 defender.SetBlocking(true, 1);
 Check(defender.CanParry(1.27f), "Fresh guard allows a parry throughout the wider window");
@@ -25,6 +41,33 @@ defender.AddPressure(70, 1.61f);
 defender.Deflect(1.62f);
 Near(defender.Pressure, 70, "Deflection preserves rather than restores defender concentration");
 Check(!defender.CanParry(1.63f), "One press deflects one strike");
+var earlyGuard = new PostureState();
+earlyGuard.SetBlocking(true, 10);
+earlyGuard.AnticipateAttack(10.15f, .24f);
+Check(earlyGuard.CanParry(10.4f), "A block raised shortly before windup can parry its impact");
+Check(!earlyGuard.CanParry(10.48f), "The early-guard extension expires shortly after expected impact");
+earlyGuard.Reset();
+earlyGuard.SetBlocking(true, 10);
+earlyGuard.AnticipateAttack(10.21f, .9f);
+Check(!earlyGuard.CanParry(10.5f), "Long-held block cannot automatically parry a later windup");
+earlyGuard.Reset();
+earlyGuard.SetBlocking(true, 20);
+earlyGuard.AnticipateAttack(20.1f, .24f);
+earlyGuard.Deflect(20.2f);
+earlyGuard.AnticipateAttack(20.21f, .9f);
+Check(!earlyGuard.CanParry(20.3f), "One guard press cannot parry twice through anticipation");
+earlyGuard.SetBlocking(false, 20.21f);
+earlyGuard.SetBlocking(true, 20.22f);
+earlyGuard.AnticipateAttack(20.23f, .9f);
+Check(!earlyGuard.CanParry(20.4f), "Early guard cannot bypass the shared anti-spam cooldown");
+earlyGuard.Reset();
+earlyGuard.SetBlocking(true, 30);
+earlyGuard.AnticipateAttack(30.1f, .24f);
+earlyGuard.AnticipateAttack(30.15f, .9f);
+Check(!earlyGuard.CanParry(30.5f), "Additional warnings cannot keep extending the same guard press");
+earlyGuard.SetBlocking(false, 30.3f);
+Check(!earlyGuard.CanParry(30.32f), "Releasing guard also cancels its early-parry opportunity");
+
 var attacker = new PostureState();
 attacker.AddPressure(45, 1.62f);
 attacker.Recoil(1.62f);
@@ -64,7 +107,7 @@ idle.SetBlocking(true, 21.2f);
 idle.Tick(.5f, 21.7f);
 Near(idle.Pressure, 60, "Guard recovery waits more than two seconds after concentration damage");
 idle.Tick(.5f, 22.1f);
-Near(idle.Pressure, 46, "Holding guard recovers faster once resting");
+Near(idle.Pressure, 32.5f, "Holding guard recovers faster once resting");
 idle.Tick(100, 200);
 Near(idle.Pressure, 0, "Recovery cannot go below zero");
 idle.AddPressure(80, 201);
@@ -90,12 +133,6 @@ tactics.Update(85, 20);
 Check(tactics.Retreating, "A timer never forces an exhausted enemy back into combat");
 Check(!tactics.CanCounterattack(85, 100, true), "Even a vulnerable target is unsafe at critical load");
 tactics.Reset();
-tactics.Update(62, 0, fatigue: 5);
-Check(tactics.Retreating, "Accumulated fatigue prompts an earlier recovery break");
-tactics.Update(31, 1, fatigue: 5);
-Check(tactics.Retreating, "A fatigued enemy recovers further before returning");
-tactics.Update(30, 1.1f, fatigue: 5);
-Check(!tactics.Retreating, "Fatigued enemy can return once its reserve is sufficient");
 tactics.Reset();
 tactics.Update(40, 0, endurance: 200);
 tactics.Update(69, .1f, endurance: 200);
@@ -126,14 +163,14 @@ tactics.Reset();
 Check(!tactics.Retreating && !tactics.UrgentRetreat && tactics.Aggressive, "Respawn clears recovery decisions and load history");
 
 var opportunist = new EnemyTactics();
-opportunist.Update(96, 0, fatigue: 8, threatened: true);
+opportunist.Update(96, 0, threatened: true);
 Check(opportunist.Retreating, "An exhausted enemy normally retreats");
-opportunist.Update(96, .1f, fatigue: 8, threatened: true, opponentPressure: 70);
+opportunist.Update(96, .1f, threatened: true, opponentPressure: 70);
 Check(opportunist.ExploitingWeakness && opportunist.Aggressive && !opportunist.Retreating && !opportunist.UrgentRetreat,
-    "A visible low-reserve opponent overrides fatigue, critical own pressure and retreat commitment");
+    "A visible low-reserve opponent overrides critical own pressure and retreat commitment");
 opportunist.Reengage(96, .2f);
 Check(opportunist.Aggressive, "Reengagement cannot erase aggression against a weak opponent");
-opportunist.Update(96, .3f, fatigue: 8, threatened: true, opponentPressure: 69);
+opportunist.Update(96, .3f, threatened: true, opponentPressure: 69);
 Check(!opportunist.ExploitingWeakness && opportunist.Retreating, "Normal survival tactics resume once the opponent recovers");
 opportunist.Update(99, .4f, endurance: 50, opponentDisrupted: true);
 Check(opportunist.Aggressive && !opportunist.Retreating, "An off-balance opponent is attacked despite almost exhausted own reserve");
@@ -171,51 +208,40 @@ Check(!retreatAfterHits.Retreating, "One normal hit does not cause constant flee
 woundedEnemy.AddPressure(22, 20.4f);
 retreatAfterHits.Update(woundedEnemy.Pressure, 20.4f);
 Check(!retreatAfterHits.Retreating, "Moderate hit pressure does not force retreat");
-var exhausted = new PostureState();
-exhausted.AddPressure(70, 0);
+var longFight = new PostureState();
+longFight.AddPressure(70, 0);
 for (int step = 1; step <= 8; step++)
 {
-    exhausted.AddPressure(.01f, step * .5f);
-    exhausted.Tick(.5f, step * .5f);
+    longFight.RecordCombat(step * .5f);
+    longFight.Tick(.5f, step * .5f);
 }
-Near(exhausted.Fatigue, 4, "Time above the fatigue threshold accumulates even while recovery is delayed");
-Near(exhausted.RecoveryMultiplier, 1f / 3, "Four seconds of overload reduces recovery to one third");
 var fresh = new PostureState();
-fresh.AddPressure(exhausted.Pressure, 4);
-float startingPressure = exhausted.Pressure;
-exhausted.Tick(.1f, 6.1f);
+fresh.AddPressure(70, 4);
+longFight.Tick(.1f, 6.1f);
 fresh.Tick(.1f, 6.1f);
-Check(exhausted.Pressure > fresh.Pressure, "Longer overload makes the same pressure harder to recover from");
-Check(exhausted.Pressure < startingPressure, "Fatigue slows recovery without preventing it");
-float beforeParry = exhausted.Pressure;
-exhausted.Deflect(6.2f);
-Near(exhausted.Pressure, beforeParry, "A parry cannot reduce accumulated load");
-for (int step = 0; step < 100 && exhausted.Pressure > PostureState.FatigueThreshold; step++)
-    exhausted.Tick(.1f, 9 + step * .1f);
-Check(exhausted.Pressure <= PostureState.FatigueThreshold && exhausted.Fatigue > 0, "Rest crosses the threshold without erasing accumulated fatigue");
-float retainedFatigue = exhausted.Fatigue;
-exhausted.Tick(.2f, 30);
-Near(exhausted.Fatigue, retainedFatigue - .1f, "Below the threshold fatigue dissipates gradually");
-exhausted.Tick(-1, 30);
-Near(exhausted.Fatigue, retainedFatigue - .1f, "Negative delta time cannot change fatigue");
-exhausted.Reset();
-Near(exhausted.Fatigue, 0, "Revive clears accumulated fatigue");
-Near(exhausted.RecoveryMultiplier, 1, "Revive restores normal recovery speed");
-var brokenFatigue = new PostureState();
-brokenFatigue.AddPressure(100, 0);
-brokenFatigue.Tick(.5f, .5f);
-Near(brokenFatigue.Fatigue, .5f, "Guard-break time also accumulates fatigue");
-for (int step = 1; step <= 20; step++)
+Near(longFight.Pressure, fresh.Pressure, "Combat history cannot slow recovery at the same current concentration");
+foreach (var zone in new[] { (20f, 1f), (33f, 1f), (50f, 2f), (67f, 2f), (80f, 4f) })
 {
-    brokenFatigue.AddPressure(1, .5f);
-    brokenFatigue.Tick(.5f, .5f);
+    var state = new PostureState();
+    state.AddPressure(zone.Item1, 0);
+    Near(state.RecoveryMultiplier, zone.Item2, "Current load selects the appropriate recovery zone");
+    state.Tick(.01f, 3);
+    Near(state.Pressure, zone.Item1 - 18 * .01f * zone.Item2, "Zone recovery applies the correct speed");
 }
-Near(brokenFatigue.Fatigue, PostureState.MaximumFatigue, "Accumulated fatigue is capped");
-Near(brokenFatigue.RecoveryMultiplier, .2f, "Maximum fatigue retains twenty percent recovery speed");
-brokenFatigue.Tick(100, 200);
-brokenFatigue.Tick(100, 300);
-Near(brokenFatigue.Fatigue, 0, "Sufficient rest fully clears fatigue");
-Near(brokenFatigue.Pressure, 0, "Sufficient rest fully restores concentration");
+var crossing = new PostureState();
+crossing.AddPressure(90, 0);
+crossing.Tick(1, 3);
+Near(crossing.Pressure, 42.5f, "Recovery slows down when crossing from the high zone to the middle zone");
+var smallFrames = new PostureState();
+smallFrames.AddPressure(90, 0);
+for (int step = 0; step < 100; step++) smallFrames.Tick(.01f, 3 + step * .01f);
+Near(smallFrames.Pressure, crossing.Pressure, "Recovery across zones is independent of frame size");
+crossing.Tick(1, 4);
+Near(crossing.Pressure, 19.75f, "Recovery slows again when crossing into the low zone");
+crossing.Tick(-1, 4);
+Near(crossing.Pressure, 19.75f, "Negative delta time cannot change concentration");
+crossing.Tick(100, 200);
+Near(crossing.Pressure, 0, "Long recovery stops at zero load");
 var emergencyDefender = new PostureState();
 emergencyDefender.AddPressure(5, 10);
 Check(emergencyDefender.TryEmergencyGuard(45, 10), "Emergency defense can raise guard immediately");
@@ -235,7 +261,7 @@ Near(emergencyDefender.Pressure, 100, "Failed defense during a break cannot exte
 var recoilingDefender = new PostureState();
 recoilingDefender.Recoil(20);
 Check(!recoilingDefender.TryEmergencyGuard(45, 20.1f), "Emergency defense cannot bypass parry recoil");
-Near(recoilingDefender.Pressure, 0, "An unavailable emergency defense does not charge fatigue load");
+Near(recoilingDefender.Pressure, 0, "An unavailable emergency defense does not consume concentration");
 Check(recoilingDefender.TryEmergencyGuard(45, 20.4f), "Emergency defense becomes available after recoil expires");
 var guardedRecovery = new PostureState();
 guardedRecovery.AddPressure(50, 10);
@@ -243,23 +269,23 @@ guardedRecovery.SetBlocking(true, 10);
 guardedRecovery.Tick(.1f, 12);
 Near(guardedRecovery.Pressure, 50, "Exactly two seconds is not enough for guarded recovery");
 guardedRecovery.Tick(.1f, 12.01f);
-Near(guardedRecovery.Pressure, 47.2f, "Guarded recovery resumes after more than two seconds");
+Near(guardedRecovery.Pressure, 44.4f, "Guarded recovery resumes after more than two seconds");
 guardedRecovery.AddPressure(1, 12.1f);
 guardedRecovery.Deflect(12.2f);
 guardedRecovery.Tick(.1f, 13.5f);
-Near(guardedRecovery.Pressure, 48.2f, "Parry does not restore load and restarts the recovery lockout");
+Near(guardedRecovery.Pressure, 45.4f, "Parry does not restore load and restarts the recovery lockout");
 guardedRecovery.SetBlocking(false, 13.6f);
 guardedRecovery.SetBlocking(true, 13.7f);
 guardedRecovery.Tick(.1f, 14.1f);
-Near(guardedRecovery.Pressure, 48.2f, "Guard tapping cannot bypass the timer restarted by parrying");
+Near(guardedRecovery.Pressure, 45.4f, "Guard tapping cannot bypass the timer restarted by parrying");
 guardedRecovery.SetBlocking(false, 14.1f);
 guardedRecovery.Tick(.1f, 14.1f);
-Near(guardedRecovery.Pressure, 48.2f, "Releasing guard cannot bypass the combat recovery delay");
+Near(guardedRecovery.Pressure, 45.4f, "Releasing guard cannot bypass the combat recovery delay");
 guardedRecovery.SetBlocking(true, 14.11f);
 guardedRecovery.Tick(.1f, 14.11f);
-Near(guardedRecovery.Pressure, 48.2f, "Successful parrying restarts the full two-second delay");
+Near(guardedRecovery.Pressure, 45.4f, "Successful parrying restarts the full two-second delay");
 guardedRecovery.Tick(.1f, 14.21f);
-Near(guardedRecovery.Pressure, 45.4f, "Recovery resumes only after the last parry's delay expires");
+Near(guardedRecovery.Pressure, 39.8f, "Recovery resumes only after the last parry's delay expires");
 
 var fighting = new PostureState();
 fighting.AddPressure(70, 0);
@@ -267,7 +293,6 @@ fighting.Tick(1, 1);
 fighting.AddPressure(100, 1);
 fighting.Tick(.1f, 2.3f);
 Near(fighting.Pressure, 35, "Break recovery retains its explicit partial-load reset");
-float combatFatigue = fighting.Fatigue;
 for (int step = 0; step < 10; step++)
 {
     float now = 3 + step * .5f;
@@ -275,14 +300,12 @@ for (int step = 0; step < 10; step++)
     fighting.Tick(.5f, now);
 }
 Near(fighting.Pressure, 35, "Continuous parries never restore load");
-Near(fighting.Fatigue, combatFatigue, "Continuous parries never clear fatigue below the threshold");
 fighting.SetBlocking(false, 8);
 fighting.RecordCombat(8);
 fighting.Tick(.1f, 9.9f);
 Near(fighting.Pressure, 35, "Starting an attack also prevents passive recovery");
-Near(fighting.Fatigue, combatFatigue, "Starting an attack also prevents fatigue recovery");
 fighting.Tick(.1f, 10.1f);
-Check(fighting.Pressure < 35 && fighting.Fatigue < combatFatigue, "Both measures recover after genuine rest");
+Check(fighting.Pressure < 35, "Concentration recovers after genuine rest");
 var roller = new PostureState();
 roller.SetBlocking(true, 10);
 Check(roller.TrySpendForRoll(20, 10), "A roll can spend available concentration");
@@ -291,7 +314,7 @@ Check(!roller.Blocking, "Rolling lowers guard");
 roller.Tick(.1f, 11.9f);
 Near(roller.Pressure, 20, "Rolling restarts the recovery delay");
 roller.AddPressure(60, 12);
-Check(!roller.TrySpendForRoll(20, 12), "A roll cannot break concentration to gain invulnerability");
+Check(!roller.TrySpendForRoll(20, 12), "A roll cannot exhaust concentration to reduce its hitbox");
 Near(roller.Pressure, 80, "A rejected roll does not spend concentration");
 roller.Recoil(13);
 Check(!roller.TrySpendForRoll(1, 13.1f), "Parry recoil prevents rolling");
@@ -301,6 +324,32 @@ Check(!roller.TrySpendForRoll(20, 14.1f), "Broken concentration prevents rolling
 roller.Reset();
 Check(!roller.TrySpendForRoll(-20, 20), "Invalid roll costs cannot restore concentration");
 Near(roller.Pressure, 0, "Rejected negative roll cost leaves pressure unchanged");
+var rollChain = new RollSequence();
+var chainGuard = new PostureState();
+chainGuard.ConfigureEndurance(500);
+Check(rollChain.TrySpend(chainGuard, 0, .23f, 50, 25, 2), "First player roll starts a paid sequence");
+Near(chainGuard.RemainingEndurance, 450, "First roll spends fifty actual concentration points");
+Check(rollChain.TrySpend(chainGuard, .6f, .23f, 50, 25, 2), "Second quick roll continues the sequence");
+Near(chainGuard.RemainingEndurance, 375, "Second roll spends seventy-five points");
+Check(rollChain.TrySpend(chainGuard, 1.2f, .23f, 50, 25, 2), "Third quick roll continues the sequence");
+Near(chainGuard.RemainingEndurance, 275, "Third roll spends one hundred points");
+chainGuard.Recoil(1.7f);
+Check(!rollChain.TrySpend(chainGuard, 1.8f, .23f, 50, 25, 2), "Rejected roll during recoil does not advance the chain");
+Near(chainGuard.RemainingEndurance, 275, "Rejected roll does not consume concentration");
+Near(rollChain.Cost(2.1f, 50, 25, 2), 125, "Other combat actions do not reset or increase the chain price");
+Near(rollChain.Cost(3.42f, 50, 25, 2), 125, "Reset delay is measured from the end of the last accepted roll");
+Near(rollChain.Cost(3.5f, 50, 25, 2), 50, "Two seconds without rolling restore the base price");
+Check(rollChain.TrySpend(chainGuard, 3.5f, .23f, 50, 25, 2), "A rested roll starts a fresh sequence");
+Near(chainGuard.RemainingEndurance, 225, "A new sequence spends the base price again");
+rollChain.Reset();
+Near(rollChain.Cost(3.6f, 50, 25, 2), 50, "Respawn clears the sequence surcharge");
+var smallChainReserve = new PostureState();
+var costlyChain = new RollSequence();
+Check(costlyChain.TrySpend(smallChainReserve, 10, .23f, 40, 30, 2), "An affordable first roll is accepted");
+Check(!costlyChain.TrySpend(smallChainReserve, 10.6f, .23f, 40, 30, 2), "An unaffordable follow-up roll is rejected");
+Near(smallChainReserve.Pressure, 40, "Insufficient reserve does not spend or break concentration");
+Near(costlyChain.Cost(11, 40, 30, 2), 70, "Rejected follow-up retains its original next-roll cost");
+
 var sturdy = new PostureState();
 sturdy.ConfigureEndurance(200);
 Near(sturdy.RemainingEndurance, 200, "Configured endurance starts full");

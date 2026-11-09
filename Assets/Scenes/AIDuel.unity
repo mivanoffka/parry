@@ -2952,9 +2952,9 @@ MonoBehaviour:
   moveSpeed: 4.2
   attackDistance: 2.1
   stunDuration: 0.23
-  windup: 0.32
-  recovery: 0.8
-  attackInterval: 1
+  windup: 0.24
+  recovery: 0.5
+  attackInterval: 0.65
   reach: 2.5
   halfAngle: 35
   damage: 1
@@ -4851,9 +4851,9 @@ MonoBehaviour:
   moveSpeed: 4.2
   attackDistance: 2.1
   stunDuration: 0.23
-  windup: 0.38
-  recovery: 0.8
-  attackInterval: 1.15
+  windup: 0.285
+  recovery: 0.5
+  attackInterval: 0.75
   reach: 2.5
   halfAngle: 35
   damage: 1

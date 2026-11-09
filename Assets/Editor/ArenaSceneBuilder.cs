@@ -106,9 +106,9 @@ namespace Parry.Editor
                         throw new InvalidOperationException("Blood traces hit the player's controller instead of the floor.");
                     Debug.Log("PARRY BLOOD IMPACT CHECK PASSED");
                     player.Guard.ResetCombat();
-                    if (!player.TryRoll(Vector3.right) || !player.Rolling || Mathf.Abs(player.Guard.Pressure - 20) > .01f)
+                    if (!player.TryRoll(Vector3.right) || !player.Rolling || Mathf.Abs(player.Guard.Pressure - 100f * 50 / player.Guard.EndurancePoints) > .01f)
                         throw new InvalidOperationException("Player roll did not spend concentration.");
-                    if (player.TryRoll(Vector3.right) || Mathf.Abs(player.Guard.Pressure - 20) > .01f)
+                    if (player.TryRoll(Vector3.right) || Mathf.Abs(player.Guard.Pressure - 100f * 50 / player.Guard.EndurancePoints) > .01f)
                         throw new InvalidOperationException("Rejected player roll spent concentration again.");
                     var fill = player.transform.Find("Concentration pressure").GetComponent<LineRenderer>();
                     var background = player.transform.Find("Concentration background").GetComponent<LineRenderer>();
@@ -229,6 +229,67 @@ namespace Parry.Editor
             EditorApplication.EnterPlaymode();
         }
 
+        public static void VerifyAttackClashes()
+        {
+            PrepareRuntimeCheck();
+            EditorApplication.playModeStateChanged += state =>
+            {
+                if (state != PlayModeStateChange.EnteredPlayMode) return;
+                try
+                {
+                    var arena = UnityEngine.Object.FindAnyObjectByType<ArenaDemo>();
+                    var player = arena.GetComponentInChildren<PlayerMotor>();
+                    var enemy = arena.GetComponentInChildren<EnemyBrain>();
+                    player.enabled = enemy.enabled = false;
+                    var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                    var enemyState = typeof(EnemyBrain).GetField("state", flags);
+                    float windup = (float)typeof(PlayerMotor).GetField("windup", flags).GetValue(player);
+                    foreach (bool mutualActive in new[] { true, false })
+                    foreach (bool receiveOnEnemy in new[] { true, false })
+                    {
+                        player.Respawn();
+                        enemy.Health.ConfigureDurability(2, 0);
+                        player.Guard.State.ConfigureEndurance(100);
+                        enemy.Guard.State.ConfigureEndurance(100);
+                        player.Guard.ResetCombat(); enemy.Guard.ResetCombat();
+                        player.Push(Vector3.zero, 0); enemy.Health.Push(Vector3.zero, 0);
+                        enemy.transform.position = Vector3.forward * 1.5f;
+                        typeof(PlayerMotor).GetField("activeAttack", flags).SetValue(player, AttackChoice.Slash);
+                        typeof(PlayerMotor).GetField("attackRemaining", flags).SetValue(player, .3f);
+                        // Block cases always give the receiver a windup and the sender an active strike.
+                        bool playerActive = mutualActive || receiveOnEnemy;
+                        bool enemyActive = mutualActive || !receiveOnEnemy;
+                        typeof(PlayerMotor).GetField("attackStartedAt", flags).SetValue(player,
+                            Time.time - (playerActive ? windup + .02f : .05f));
+                        typeof(PlayerMotor).GetField("attackDirection", flags).SetValue(player, Vector3.forward);
+                        typeof(EnemyBrain).GetField("facing", flags).SetValue(enemy, Vector3.back);
+                        enemyState.SetValue(enemy, Enum.Parse(enemyState.FieldType, "Windup"));
+                        typeof(EnemyBrain).GetField("stateUntil", flags).SetValue(enemy, Time.time + (enemyActive ? -.01f : .1f));
+                        Physics.SyncTransforms();
+                        if (receiveOnEnemy) enemy.ReceiveAttack(1, Vector3.forward, player.Guard);
+                        else player.ReceiveAttack(1, Vector3.back, enemy.Guard);
+                        float cost = mutualActive ? 45 : 28;
+                        if (player.Health != 2 || enemy.Health.Health != 2 || player.Attacking || enemy.AttackThreatening
+                            || !player.Guard.Disrupted || !enemy.Guard.Disrupted
+                            || Mathf.Abs(player.Guard.Pressure - cost) > .01f || Mathf.Abs(enemy.Guard.Pressure - cost) > .01f
+                            || ((Vector3)typeof(PlayerMotor).GetField("knockback", flags).GetValue(player)).z >= 0
+                            || ((Vector3)typeof(PracticeTarget).GetField("knockback", flags).GetValue(enemy.Health)).z <= 0)
+                            throw new InvalidOperationException("Attack clash outcome depends on callback order or damages health.");
+                        // A second callback from this same pair cannot apply damage or load again.
+                        enemy.ReceiveAttack(1, Vector3.forward, player.Guard);
+                        player.ReceiveAttack(1, Vector3.back, enemy.Guard);
+                        if (player.Health != 2 || enemy.Health.Health != 2
+                            || Mathf.Abs(player.Guard.Pressure - cost) > .01f || Mathf.Abs(enemy.Guard.Pressure - cost) > .01f)
+                            throw new InvalidOperationException("The same clash resolved more than once.");
+                    }
+                    Debug.Log("PARRY ATTACK CLASH PHASES, CALLBACK ORDER AND SINGLE RESOLUTION CHECK PASSED");
+                    EditorApplication.Exit(0);
+                }
+                catch (Exception error) { Debug.LogException(error); EditorApplication.Exit(1); }
+            };
+            EditorApplication.EnterPlaymode();
+        }
+
         public static void VerifyLunge()
         {
             PrepareRuntimeCheck();
@@ -252,6 +313,9 @@ namespace Parry.Editor
                     typeof(PlayerMotor).GetField("attackDirection", flags).SetValue(player, Vector3.forward);
                     enemy.transform.position = Vector3.forward * 1.5f;
                     enemy.Health.ConfigureDurability(2, 0);
+                    // Keep defense-cost assertions independent of the scene's editable endurance.
+                    enemy.Guard.State.ConfigureEndurance(100);
+                    player.Guard.State.ConfigureEndurance(100);
                     enemy.Guard.ResetCombat();
                     enemy.Guard.SetFacing(Vector3.back);
                     enemy.Guard.State.SetBlocking(true, Time.time);
@@ -284,15 +348,24 @@ namespace Parry.Editor
 
                     enemy.Health.ConfigureDurability(2, 0);
                     hits.Clear();
+                    float standingRadius = enemy.Health.Hitbox.Shape.radius;
+                    float standingHeight = enemy.Health.Hitbox.Shape.height;
                     stateField.SetValue(enemy, Enum.Parse(stateField.FieldType, "Roll"));
+                    enemy.transform.position = new Vector3(.55f, 0, 1.5f);
+                    Physics.SyncTransforms();
                     strike.Invoke(player, null);
-                    if (enemy.Health.Health != 2 || hits.Contains(enemy.Health))
-                        throw new InvalidOperationException("Roll invulnerability consumed a lunge contact or allowed damage.");
-                    stateField.SetValue(enemy, Enum.Parse(stateField.FieldType, "Guard"));
+                    if (enemy.Health.Health != 2 || hits.Contains(enemy.Health)
+                        || enemy.Health.Hitbox.Shape.radius >= standingRadius
+                        || enemy.Health.Hitbox.Shape.height >= standingHeight)
+                        throw new InvalidOperationException("Rolling did not shrink the enemy hitbox or avoid an off-center lunge.");
+                    enemy.transform.position = Vector3.forward * 1.5f;
+                    Physics.SyncTransforms();
                     strike.Invoke(player, null);
                     strike.Invoke(player, null);
-                    if (enemy.Health.Health != 1)
-                        throw new InvalidOperationException("Lunge could not connect exactly once after roll invulnerability ended.");
+                    if (enemy.Health.Health != 1 || enemy.Rolling)
+                        throw new InvalidOperationException("An on-center lunge did not hit and interrupt the enemy roll exactly once.");
+                    if (Mathf.Abs(enemy.Health.Hitbox.Shape.radius - standingRadius) > .001f)
+                        throw new InvalidOperationException("Enemy hitbox did not restore after roll interruption.");
 
                     enemy.Health.ConfigureDurability(2, 0);
                     hits.Clear();
@@ -312,7 +385,18 @@ namespace Parry.Editor
                     strike.Invoke(player, null);
                     if (enemy.Health.Health != 2)
                         throw new InvalidOperationException("Lunge passed through a solid wall.");
-                    Debug.Log("PARRY LUNGE BLOCK/PARRY, DODGE, LANE AND WALL CHECK PASSED");
+                    float playerStandingRadius = player.Hitbox.Shape.radius;
+                    typeof(PlayerMotor).GetField("rollRemaining", flags).SetValue(player, .2f);
+                    if (player.Hitbox.Shape.radius >= playerStandingRadius)
+                        throw new InvalidOperationException("Player roll did not shrink the damage hitbox.");
+                    player.Guard.ResetCombat();
+                    typeof(PlayerMotor).GetField("invulnerableUntil", flags).SetValue(player, 0f);
+                    int playerHealth = player.Health;
+                    player.ReceiveAttack(1, Vector3.back, enemy.Guard);
+                    if (player.Health != playerHealth - 1 || player.Rolling
+                        || Mathf.Abs(player.Hitbox.Shape.radius - playerStandingRadius) > .001f)
+                        throw new InvalidOperationException("A connecting attack could not damage and interrupt the player roll.");
+                    Debug.Log("PARRY LUNGE DEFENSE, SHRINKING ROLL HITBOXES, LANE AND WALL CHECK PASSED");
                     EditorApplication.Exit(0);
                 }
                 catch (Exception error)
@@ -421,8 +505,8 @@ namespace Parry.Editor
                     enemy.Guard.ResetCombat();
                     if (enemy.Guard.EndurancePoints != 200 || enemy.Guard.RemainingEndurance != 200)
                         throw new InvalidOperationException("Combat reset lost configured endurance.");
-                    if (!player.TryRoll(Vector3.right) || Mathf.Abs(player.Guard.RemainingEndurance - 130) > .01f
-                        || Mathf.Abs(player.Guard.Pressure - 100f * 20 / 150) > .01f)
+                    if (!player.TryRoll(Vector3.right) || Mathf.Abs(player.Guard.RemainingEndurance - 100) > .01f
+                        || Mathf.Abs(player.Guard.Pressure - 100f * 50 / 150) > .01f)
                         throw new InvalidOperationException("Player roll did not use the configured endurance capacity.");
                     player.Respawn();
                     if (player.Guard.EndurancePoints != 150 || player.Guard.RemainingEndurance != 150
