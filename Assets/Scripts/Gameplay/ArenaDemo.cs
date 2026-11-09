@@ -212,7 +212,7 @@ namespace Parry
             GUI.Label(new Rect(22, 19, 335, 18), "WASD / Arrows: move  •  Mouse: aim  •  LMB / J: attack", controlsLabel);
             GUI.Label(new Rect(22, 37, 335, 18), "Hold RMB / K / LB: block  •  Tap before impact: parry", controlsLabel);
             GUI.Label(new Rect(22, 55, 335, 18), "Space: dodge  •  R: revive / heal", controlsLabel);
-            GUI.Label(new Rect(22, 73, 335, 18), "Hold attack + mouse ↑: lunge  •  Release: execute", controlsLabel);
+            GUI.Label(new Rect(22, 73, 335, 18), "1: normal  •  2: prepare lunge  •  Click attack: execute", controlsLabel);
         }
     }
 }

@@ -7,6 +7,9 @@ namespace Parry
     {
         SpriteRenderer blade;
         static Sprite sword;
+        static Material chargeMaterial;
+        LineRenderer chargeHalo, chargeCore, glintHorizontal, glintVertical;
+        Light chargeLight;
         public static WeaponVisual Create(Transform owner)
         {
             var go = new GameObject("Visible sword"); go.transform.SetParent(owner, false);
@@ -33,9 +36,80 @@ namespace Parry
             }
             blade = gameObject.AddComponent<SpriteRenderer>(); blade.sprite = sword;
             blade.sharedMaterial = DemoArt.LitSpriteMaterial("sword");
+            if (chargeMaterial == null)
+            {
+                chargeMaterial = new Material(Resources.Load<Shader>("Combat/MetalSparks"))
+                    { name = "Powerful attack weapon gleam" };
+                chargeMaterial.SetFloat("_Intensity", 10);
+            }
+            chargeHalo = CreateChargeLine("Blade charge halo", .16f);
+            chargeCore = CreateChargeLine("White-hot blade edge", .035f);
+            glintHorizontal = CreateChargeLine("Charge glint horizontal", .035f);
+            glintVertical = CreateChargeLine("Charge glint vertical", .025f);
+            var lightObject = new GameObject("Weapon charge light");
+            lightObject.transform.SetParent(transform, false);
+            chargeLight = lightObject.AddComponent<Light>();
+            chargeLight.type = LightType.Point;
+            chargeLight.color = Color.white;
+            chargeLight.range = 3;
+            chargeLight.shadows = LightShadows.None;
+            chargeLight.enabled = false;
         }
+        LineRenderer CreateChargeLine(string label, float width)
+        {
+            var line = DemoArt.Line(label, transform, Color.white, width);
+            line.sharedMaterial = chargeMaterial;
+            line.positionCount = 2;
+            line.numCapVertices = 6;
+            line.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            line.receiveShadows = false;
+            line.enabled = false;
+            return line;
+        }
+
+        // Called after Pose so the gleam follows the actual blade in every aim direction.
+        public void ChargeGlint(float progress, bool preparing)
+        {
+            bool visible = blade.enabled && preparing;
+            chargeHalo.enabled = chargeCore.enabled = glintHorizontal.enabled = glintVertical.enabled = visible;
+            chargeLight.enabled = false;
+            if (!visible) return;
+            var camera = Camera.main;
+            // One short pulse near the start of the windup; never repeat while holding.
+            float rise = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(0, .07f, progress));
+            float fade = 1 - Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.07f, .4f, progress));
+            float pulse = rise * fade;
+            chargeHalo.enabled = chargeCore.enabled = pulse > .001f;
+            Vector3 offset = -camera.transform.forward * .035f;
+            Vector3 root = transform.TransformPoint(new Vector3(0, (19 - 64 * .16f) / 48, 0)) + offset;
+            Vector3 tip = transform.TransformPoint(new Vector3(0, (61 - 64 * .16f) / 48, 0)) + offset;
+            chargeHalo.SetPosition(0, root); chargeHalo.SetPosition(1, tip);
+            chargeCore.SetPosition(0, root); chargeCore.SetPosition(1, tip);
+            chargeHalo.startColor = chargeHalo.endColor = new Color(1, 1, 1, pulse * .04f);
+            chargeCore.startColor = chargeCore.endColor = new Color(1, 1, 1, pulse * .12f);
+            // Only a small, dim glint remains in the held pose; the strike clears it entirely.
+            Vector3 center = Vector3.Lerp(root, tip, Mathf.Lerp(.2f, .9f, Mathf.Clamp01(progress / .4f)));
+            float radius = .045f + pulse * .09f;
+            glintHorizontal.SetPosition(0, center - camera.transform.right * radius);
+            glintHorizontal.SetPosition(1, center + camera.transform.right * radius);
+            glintVertical.SetPosition(0, center - camera.transform.up * radius * .65f);
+            glintVertical.SetPosition(1, center + camera.transform.up * radius * .65f);
+            glintHorizontal.startColor = glintHorizontal.endColor =
+                glintVertical.startColor = glintVertical.endColor = new Color(1, 1, 1, .025f + pulse * .1f);
+            chargeLight.transform.position = center - camera.transform.forward * .3f;
+            chargeLight.intensity = pulse * .8f;
+            chargeLight.enabled = pulse > .001f;
+        }
+
+        void OnDisable()
+        {
+            if (chargeHalo == null) return;
+            chargeHalo.enabled = chargeCore.enabled = glintHorizontal.enabled = glintVertical.enabled = false;
+            chargeLight.enabled = false;
+        }
+
         public void Pose(Vector3 facing, bool visible, bool blocking, bool broken, float swing = -1, float windup = 0,
-            float reach = 2.5f, float halfAngle = 35, float recovery = 0, bool circular = false, bool lunge = false)
+            float reach = 2.5f, float halfAngle = 35, float recovery = 0, bool circular = false, bool lunge = false, bool powerful = false, bool thrustStance = false)
         {
             blade.enabled = visible;
             if (!visible) return;
@@ -58,22 +132,43 @@ namespace Parry
             if (broken) { pitch = 22; roll = -side * 20; }
             transform.rotation = camera.transform.rotation * Quaternion.Euler(pitch, yaw, roll);
             transform.localScale = Vector3.one;
+            if (thrustStance && !blocking && !broken)
+            {
+                // The thrusting guard aims the blade along the ground-plane heading;
+                // the ordinary guard keeps the sword raised for a cutting swing.
+                Vector3 projectedDirection = Vector3.ProjectOnPlane(facing, camera.transform.forward).normalized;
+                float readyAngle = Mathf.Atan2(-Vector3.Dot(projectedDirection, right),
+                    Vector3.Dot(projectedDirection, camera.transform.up)) * Mathf.Rad2Deg;
+                transform.rotation = camera.transform.rotation * Quaternion.Euler(0, 0, readyAngle);
+                transform.position += facing * .12f;
+            }
             if (!blocking && !broken && (windup > 0 || swing >= 0))
             {
                 Vector3 readyPosition = transform.position;
                 Quaternion readyRotation = transform.rotation;
                 float sector = circular ? 180 : halfAngle;
-                float progress = swing >= 0 ? Mathf.SmoothStep(0, 1, swing) : 0;
-                Vector3 attackDirection = lunge ? facing : Quaternion.AngleAxis(Mathf.Lerp(-sector, sector, progress), Vector3.up) * facing;
+                // Settle into the drawn-back pose early, then briefly hold it as a warning.
+                float anticipation = Mathf.SmoothStep(0, 1, Mathf.Clamp01(windup / .78f));
+                float t = Mathf.Clamp01(swing);
+                // Rapid release followed by a slower follow-through, rather than an even sweep.
+                float release = 1 - Mathf.Pow(1 - t, 3);
+                float turn = Mathf.Lerp(-sector - (circular ? 0 : 28), sector + (circular ? 0 : 12), release);
+                Vector3 attackDirection = lunge ? facing : Quaternion.AngleAxis(turn, Vector3.up) * facing;
+                float tension = swing < 0 ? 1 : 1 - release;
+                Vector3 drawBack = -facing * (powerful ? .4f : .22f) * tension
+                    + Vector3.up * (lunge ? .04f : .16f) * tension;
                 Vector3 grip = transform.parent.position + Vector3.up * .8f
-                    + attackDirection * .4f + Vector3.Cross(Vector3.up, facing) * .16f;
-                float extension = lunge ? (swing >= 0 ? Mathf.Lerp(.55f, 1, Mathf.Clamp01(swing * 3)) : .55f) : 1;
-                Vector3 tip = transform.parent.position + Vector3.up * .8f + attackDirection * Mathf.Max(.5f, reach * extension);
+                    + attackDirection * .4f + Vector3.Cross(Vector3.up, facing) * .16f + drawBack;
+                float extension = Mathf.Lerp(lunge ? .55f : .7f, 1, release);
+                Vector3 tip = transform.parent.position + Vector3.up * .8f
+                    + attackDirection * Mathf.Max(.5f, reach * extension) + drawBack;
                 Vector3 projectedBlade = Vector3.ProjectOnPlane(tip - grip, camera.transform.forward);
                 float attackAngle = Mathf.Atan2(-Vector3.Dot(projectedBlade, right),
                     Vector3.Dot(projectedBlade, camera.transform.up)) * Mathf.Rad2Deg;
                 Quaternion attackRotation = camera.transform.rotation * Quaternion.Euler(0, 0, attackAngle);
-                float blend = swing >= 0 ? 1 - Mathf.SmoothStep(0, 1, recovery) : Mathf.SmoothStep(0, 1, windup);
+                // Keep the finishing pose briefly before easing back into the current guard.
+                float settle = Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.15f, 1, recovery));
+                float blend = swing >= 0 ? 1 - settle : anticipation;
                 transform.position = Vector3.Lerp(readyPosition, grip - camera.transform.forward * .15f, blend);
                 transform.rotation = Quaternion.Slerp(readyRotation, attackRotation, blend);
                 // Sprite pivot is at 16% of 64 pixels; the blade tip is at pixel 61 (48 pixels/unit).
@@ -81,7 +176,7 @@ namespace Parry
                 float lengthScale = projectedBlade.magnitude / bladeLength;
                 transform.localScale = new Vector3(1, Mathf.Lerp(1, lengthScale, blend), 1);
             }
-            blade.color = broken ? new Color(.5f, .5f, .5f) : lunge ? new Color(1, .35f, .12f)
+            blade.color = broken ? new Color(.5f, .5f, .5f) : powerful ? Color.white
                 : blocking ? new Color(1, .85f, .55f) : Color.white;
         }
     }

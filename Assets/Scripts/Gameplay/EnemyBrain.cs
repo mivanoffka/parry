@@ -15,7 +15,7 @@ namespace Parry
         [SerializeField] float attackDistance = 2.1f;
         [SerializeField] float stunDuration = .23f;
         [Header("Attack")]
-        [SerializeField] float windup = .2f;
+        [SerializeField] float windup = .32f;
         [SerializeField] float recovery = .8f;
         [SerializeField] float attackInterval = 1f;
         [SerializeField] float reach = 2.5f;
@@ -45,7 +45,7 @@ namespace Parry
         bool TargetAlive => opponent != null ? opponent.Health.IsAlive : player != null && player.IsAlive;
         bool TargetThreatening => opponent != null ? opponent.AttackThreatening : player != null && player.AttackThreatening;
         float TargetReach => opponent != null ? opponent.AttackReach : player != null ? player.ThreatReach : 0;
-        bool TargetUnblockable => player != null && player.UnblockableAttack && player.AttackThreatening;
+        bool TargetUnblockable => player != null && player.UnblockableThreat && player.AttackThreatening;
         CombatGuard TargetGuard => opponent != null ? opponent.Guard : player.Guard;
         public bool AttackThreatening => health.IsAlive && state == State.Windup && !Guard.Disrupted;
         public void Initialize(EnemyBrain target) { opponent = target; player = null; }
@@ -169,16 +169,16 @@ namespace Parry
             if (delta.sqrMagnitude > .001f && (state == State.Chase || state == State.Retreat)) facing = delta.normalized;
             if (delta.sqrMagnitude > .001f && state == State.Guard)
                 facing = Vector3.RotateTowards(facing, delta.normalized, 4 * Time.deltaTime, 0);
+            UpdateTactics(delta);
             bool newAttack = TargetThreatening && !observedPlayerAttack;
             observedPlayerAttack = TargetThreatening;
             if (TargetUnblockable && delta.magnitude <= TargetReach + .5f && HasLineOfSight(delta)
                 && TryDodgeLunge(delta)) return;
-            if (!TargetUnblockable && state != State.Windup && TargetThreatening
+            if (!tactics.ExploitingWeakness && !TargetUnblockable && state != State.Windup && TargetThreatening
                 && delta.magnitude <= TargetReach + .3f && HasLineOfSight(delta))
                 PrepareDefense(delta, newAttack);
             Guard.Tick(CanGuard && state != State.Windup
                 && (state != State.Recovery || Time.time >= stateUntil), facing);
-            UpdateTactics(delta);
             if (Guard.Disrupted)
             {
                 state = State.Recovery;
@@ -211,16 +211,16 @@ namespace Parry
                 if (delta.sqrMagnitude > .001f) facing = delta.normalized;
                 if ((delta.magnitude <= AttackDistance || (TargetThreatening && delta.magnitude <= AttackReach + .3f)) && HasLineOfSight(delta))
                 {
-                    if (!TargetThreatening && (TargetGuard.Broken || tactics.Aggressive)) BeginWindup(true);
+                    if ((!TargetThreatening || tactics.ExploitingWeakness) && (TargetGuard.Broken || tactics.Aggressive)) BeginWindup(true);
                     else BeginGuard();
                 }
                 else Chase(delta);
             }
             else if (state == State.Guard)
             {
-                if (Time.time >= stateUntil)
+                if (Time.time >= stateUntil || (tactics.ExploitingWeakness && Time.time >= nextAttackAt))
                 {
-                    if (TargetThreatening) return;
+                    if (TargetThreatening && !tactics.ExploitingWeakness) return;
                     if (delta.magnitude > AttackReach || !HasLineOfSight(delta)) state = State.Chase;
                     else BeginWindup(true);
                 }
@@ -255,9 +255,11 @@ namespace Parry
 
         void UpdateTactics(Vector3 delta)
         {
-            bool threatened = TargetThreatening && delta.magnitude <= TargetReach + .5f && HasLineOfSight(delta);
-            bool opening = TargetGuard.Disrupted && delta.magnitude <= AttackReach && HasLineOfSight(delta);
-            tactics.Update(Guard.Pressure, Time.time, Guard.State.Fatigue, Guard.EndurancePoints, threatened, opening);
+            bool seesTarget = HasLineOfSight(delta);
+            bool threatened = TargetThreatening && delta.magnitude <= TargetReach + .5f && seesTarget;
+            bool opening = TargetGuard.Disrupted && delta.magnitude <= AttackReach && seesTarget;
+            tactics.Update(Guard.Pressure, Time.time, Guard.State.Fatigue, Guard.EndurancePoints, threatened, opening,
+                seesTarget ? TargetGuard.Pressure : 0, seesTarget && TargetGuard.Disrupted);
         }
 
         void BeginWindup(bool newCombo)
@@ -289,7 +291,7 @@ namespace Parry
 
         bool TryCornerRoll(Vector3 delta)
         {
-            if (!CanStartRoll || delta.magnitude > TargetReach + 1) return false;
+            if (!CanStartRoll || tactics.ExploitingWeakness || delta.magnitude > TargetReach + 1) return false;
             Physics.SyncTransforms();
             Vector3 origin = transform.position + Vector3.up * .6f;
             Vector3 firstNormal = Vector3.zero;
@@ -402,8 +404,8 @@ namespace Parry
             if (!health.IsAlive || Rolling) return;
             bool newAttack = TargetThreatening && !observedPlayerAttack;
             if (TargetThreatening) observedPlayerAttack = true;
-            if (!unblockable) PrepareDefense(-direction, newAttack);
-            if (!unblockable && Guard.Defend(attacker, direction, Random.value < parryChance) != DefenseResult.Hit)
+            PrepareDefense(-direction, newAttack);
+            if (Guard.Defend(attacker, direction, Random.value < parryChance, unblockable) != DefenseResult.Hit)
             {
                 if (Guard.Disrupted) { state = State.Recovery; warning.enabled = false; }
                 return;
@@ -433,16 +435,17 @@ namespace Parry
             if (!health.IsAlive || visual == null) return;
             Camera camera = Camera.main;
             float side = Vector3.Dot(facing, camera.transform.right);
-            float thrust = swing >= 0 ? Mathf.Sin(swing * Mathf.PI) : 0;
+            float thrust = swing >= 0 ? Mathf.Sin(Mathf.Pow(swing, .55f) * Mathf.PI) : 0;
+            float tension = Mathf.SmoothStep(0, 1, Mathf.Clamp01(prepare / .78f));
             visual.flipX = side < 0;
             float bob = (state == State.Chase || state == State.Retreat) && TargetAlive ? Mathf.Abs(Mathf.Sin(Time.time * 12)) * .07f : 0;
             visual.transform.localPosition = Vector3.up * (.85f + bob)
-                + facing * (thrust * .1f - prepare * .07f);
+                + facing * (thrust * .16f - tension * .13f);
             visual.transform.localScale = Rolling ? new Vector3(1.1f, .7f, 1)
                 : state == State.Windup ? new Vector3(1.15f, .9f, 1) : Vector3.one;
             visual.transform.rotation = camera.transform.rotation * (Rolling
                 ? Quaternion.Euler(0, 0, -360 * (1 - rollRemaining / rollDuration))
-                : Quaternion.Euler(0, side * 18, side * (prepare * 8 - thrust * 10)));
+                : Quaternion.Euler(0, side * 18, side * (tension * 13 - thrust * 15)));
         }
 
         bool HasLineOfSight(Vector3 delta)

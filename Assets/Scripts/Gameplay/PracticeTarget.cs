@@ -21,6 +21,11 @@ namespace Parry
         CapsuleCollider hitbox;
         readonly Collider[] obstacles = new Collider[64];
         Color baseColor;
+        public void Push(Vector3 direction, float speed)
+        {
+            knockback = Vector3.ProjectOnPlane(direction, Vector3.up).normalized * speed;
+        }
+
         void Awake()
         {
             health = maxHealth;

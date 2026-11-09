@@ -256,18 +256,45 @@ namespace Parry.Editor
                     enemy.Guard.SetFacing(Vector3.back);
                     enemy.Guard.State.SetBlocking(true, Time.time);
                     Physics.SyncTransforms();
+                    // A timed parry stops the lunge but heavily loads and pushes the defender.
+                    if (enemy.Guard.Defend(player.Guard, Vector3.forward, true, true) != DefenseResult.Parry
+                        || enemy.Health.Health != 2 || Mathf.Abs(enemy.Guard.Pressure - 80) > .01f
+                        || !player.Guard.Disrupted
+                        || ((Vector3)typeof(PlayerMotor).GetField("knockback", flags).GetValue(player)).z >= 0
+                        || ((Vector3)typeof(PracticeTarget).GetField("knockback", flags).GetValue(enemy.Health)).z <= 0)
+                        throw new InvalidOperationException("Powerful lunge parry did not apply defender cost and opposing knockback.");
+                    enemy.Guard.ResetCombat();
+                    player.Guard.ResetCombat();
+                    enemy.Guard.State.SetBlocking(true, Time.time);
+                    player.Push(Vector3.zero, 0);
+                    enemy.Health.Push(Vector3.zero, 0);
+                    if (enemy.Guard.Defend(player.Guard, Vector3.forward, false, true) != DefenseResult.Block
+                        || enemy.Health.Health != 2 || !player.Guard.Disrupted
+                        || ((Vector3)typeof(PlayerMotor).GetField("knockback", flags).GetValue(player)).z >= 0
+                        || ((Vector3)typeof(PracticeTarget).GetField("knockback", flags).GetValue(enemy.Health)).z <= 0)
+                        throw new InvalidOperationException("Powerful lunge block did not protect health and push both fighters apart.");
+                    player.Guard.ResetCombat();
+                    enemy.Guard.ResetCombat();
+                    enemy.Guard.State.Recoil(Time.time);
+                    typeof(EnemyBrain).GetField("parryChance", flags).SetValue(enemy, 0f);
                     strike.Invoke(player, null);
                     strike.Invoke(player, null);
-                    if (enemy.Health.Health != 1 || enemy.Guard.Disrupted || player.Guard.Disrupted)
-                        throw new InvalidOperationException("Lunge was blocked, parried or hit more than once.");
+                    if (enemy.Health.Health != 1)
+                        throw new InvalidOperationException("Lunge was blocked or hit more than once.");
 
                     enemy.Health.ConfigureDurability(2, 0);
                     hits.Clear();
                     stateField.SetValue(enemy, Enum.Parse(stateField.FieldType, "Roll"));
                     strike.Invoke(player, null);
-                    if (enemy.Health.Health != 2)
-                        throw new InvalidOperationException("Lunge bypassed roll invulnerability.");
+                    if (enemy.Health.Health != 2 || hits.Contains(enemy.Health))
+                        throw new InvalidOperationException("Roll invulnerability consumed a lunge contact or allowed damage.");
+                    stateField.SetValue(enemy, Enum.Parse(stateField.FieldType, "Guard"));
+                    strike.Invoke(player, null);
+                    strike.Invoke(player, null);
+                    if (enemy.Health.Health != 1)
+                        throw new InvalidOperationException("Lunge could not connect exactly once after roll invulnerability ended.");
 
+                    enemy.Health.ConfigureDurability(2, 0);
                     hits.Clear();
                     stateField.SetValue(enemy, Enum.Parse(stateField.FieldType, "Guard"));
                     enemy.transform.position = new Vector3(1.3f, 0, 1);

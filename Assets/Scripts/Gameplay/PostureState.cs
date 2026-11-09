@@ -23,6 +23,7 @@ namespace Parry
         public bool Broken(float now) => now < brokenUntil;
         public bool Disrupted(float now) => Broken(now) || now < recoilUntil;
         public bool CanParry(float now) => Blocking && now < parryUntil && !Disrupted(now);
+        bool strongAttackBreakPending;
         float brokenUntil, recoilUntil, parryUntil, nextParry, recoverAfter;
         public void RecordCombat(float now) => recoverAfter = Math.Max(recoverAfter, now + 2);
 
@@ -41,7 +42,7 @@ namespace Parry
             if (amount <= 0) return;
             RecordCombat(now);
             if (Broken(now)) return;
-            if (Pressure >= Maximum) Pressure = 35;
+            if (Pressure >= Maximum && !strongAttackBreakPending) Pressure = 35;
             Pressure = Math.Min(Maximum, Pressure + NormalizeCost(amount));
             if (Pressure >= Maximum)
             {
@@ -63,7 +64,28 @@ namespace Parry
             SetBlocking(true, now);
             return Blocking;
         }
-        public bool TrySpendForRoll(float pressureCost, float now)
+        public bool TrySpendForRoll(float pressureCost, float now) => TrySpendConcentration(pressureCost, now);
+        public bool TrySpendForPreparation(float pressureCost, float now) => TrySpendConcentration(pressureCost, now);
+        public bool TrySpendForStrongAttack(float pressureCost, float now)
+        {
+            if (pressureCost < 0 || Disrupted(now) || strongAttackBreakPending) return false;
+            RecordCombat(now);
+            Blocking = false;
+            strongAttackBreakPending = pressureCost >= RemainingEndurance;
+            Pressure = Math.Min(Maximum, Pressure + NormalizeCost(pressureCost));
+            return true;
+        }
+        // Exhaustion must not cancel the strike before its active window can deal damage.
+        public void CompleteStrongAttack(float now)
+        {
+            if (!strongAttackBreakPending) return;
+            strongAttackBreakPending = false;
+            RecordCombat(now);
+            Pressure = Maximum;
+            Blocking = false;
+            brokenUntil = Math.Max(brokenUntil, now + 1.25f);
+        }
+        bool TrySpendConcentration(float pressureCost, float now)
         {
             if (!CanSpendForRoll(pressureCost, now)) return false;
             AddPressure(pressureCost, now);
@@ -76,11 +98,11 @@ namespace Parry
         public void Tick(float deltaTime, float now)
         {
             float elapsed = Math.Max(0, deltaTime);
-            bool resting = now > recoverAfter && !Disrupted(now);
+            bool resting = now > recoverAfter && !Disrupted(now) && !strongAttackBreakPending;
             if (Pressure > FatigueThreshold) Fatigue = Math.Min(MaximumFatigue, Fatigue + elapsed);
             else if (resting) Fatigue = Math.Max(0, Fatigue - elapsed * .5f);
             if (Broken(now)) return;
-            if (Pressure >= Maximum) { Pressure = 35; recoverAfter = Math.Max(recoverAfter, now + .5f); resting = false; }
+            if (Pressure >= Maximum && !strongAttackBreakPending) { Pressure = 35; recoverAfter = Math.Max(recoverAfter, now + .5f); resting = false; }
             if (resting)
                 Pressure = Math.Max(0, Pressure - NormalizeCost((Blocking ? 28 : 18) * elapsed * RecoveryMultiplier));
         }
@@ -88,6 +110,7 @@ namespace Parry
         {
             Pressure = Fatigue = brokenUntil = recoilUntil = parryUntil = nextParry = recoverAfter = 0;
             Blocking = false;
+            strongAttackBreakPending = false;
         }
     }
 }

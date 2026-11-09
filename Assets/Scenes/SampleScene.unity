@@ -3244,7 +3244,7 @@ MonoBehaviour:
   moveSpeed: 4.2
   attackDistance: 2.1
   stunDuration: 0.23
-  windup: 0.2
+  windup: 0.32
   recovery: 0.8
   attackInterval: 1
   reach: 2.5
@@ -3262,6 +3262,7 @@ MonoBehaviour:
   cornerProbeDistance: 0.9
   approachRollRange: 7
   player: {fileID: 1989914411}
+  opponent: {fileID: 0}
 --- !u!114 &1057515781
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -5183,12 +5184,18 @@ MonoBehaviour:
   rollDuration: 0.23
   rollCooldown: 0.6
   rollPressure: 20
-  windup: 0.09
+  windup: 0.28
   activeTime: 0.12
   recovery: 0.2
   reach: 2.5
   halfAngle: 35
   damage: 1
+  strongAttackPressure: 195
+  lungeWindup: 0.65
+  lungeActiveTime: 0.16
+  lungeRecovery: 0.5
+  lungeDistance: 1.4
+  lungeWidth: 0.3
   maxHealth: 2
   hurtInvulnerability: 0.8
   endurance: 500

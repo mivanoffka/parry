@@ -16,14 +16,16 @@ namespace Parry
         [SerializeField] float rollCooldown = .6f;
         [SerializeField] float rollPressure = 20f;
         [Header("Melee")]
-        [SerializeField] float windup = .09f;
+        [SerializeField] float windup = .28f;
         [SerializeField] float activeTime = .12f;
         [SerializeField] float recovery = .2f;
         [SerializeField] float reach = 2.5f;
         [SerializeField, Range(1, 180)] float halfAngle = 35f;
         [SerializeField] int damage = 1;
         [Header("Special attack: lunge")]
-        [SerializeField] float lungeWindup = .32f;
+        [SerializeField, Min(0)] float preparationPressurePerSecond = 5f;
+        [SerializeField, Min(0)] float strongAttackPressure = 195f;
+        [SerializeField] float lungeWindup = .65f;
         [SerializeField] float lungeActiveTime = .16f;
         [SerializeField] float lungeRecovery = .5f;
         [SerializeField] float lungeDistance = 1.4f;
@@ -40,15 +42,19 @@ namespace Parry
         public Vector3 Facing { get; private set; } = Vector3.back;
         public bool Rolling => rollRemaining > 0;
         public bool Attacking => attackRemaining > 0;
-        public bool AttackThreatening => attackRemaining > CurrentRecovery;
+        public bool PreparingPowerfulAttack => !Attacking && Style == WeaponStyle.Thrusting && preparation.Active;
+        public bool UnblockableThreat => UnblockableAttack || PreparingPowerfulAttack;
+        public bool AttackThreatening => attackRemaining > CurrentRecovery || PreparingPowerfulAttack;
+        public WeaponStyle Style { get; private set; } = WeaponStyle.Normal;
+        bool ThrustAttack => activeAttack == AttackChoice.Thrust || activeAttack == AttackChoice.Lunge;
         public bool UnblockableAttack => Attacking && activeAttack == AttackChoice.Lunge;
         public float AttackReach => arena != null ? arena.BaseAttackRadius : reach;
-        public float ThreatReach => CurrentReach + (UnblockableAttack ? lungeDistance : 0);
-        float CurrentWindup => activeAttack == AttackChoice.Lunge ? lungeWindup : windup;
+        public float ThreatReach => CurrentReach + (UnblockableThreat ? lungeDistance : 0);
+        float CurrentWindup => activeAttack == AttackChoice.Lunge ? 0 : windup;
         float CurrentActive => activeAttack == AttackChoice.Lunge ? lungeActiveTime : activeTime;
         float CurrentRecovery => activeAttack == AttackChoice.Lunge ? lungeRecovery : recovery;
         float CurrentReach => AttackReach * (UnblockableAttack ? .85f : 1);
-        bool CircularStrike => CircularAttacks && !UnblockableAttack;
+        bool CircularStrike => CircularAttacks && !ThrustAttack;
         public float RollReady => Mathf.Clamp01(1 - (nextRoll - Time.time) / rollCooldown);
         CharacterController controller;
         Camera view;
@@ -62,14 +68,20 @@ namespace Parry
         bool swingSoundPlayed;
         AttackChoice activeAttack, bufferedAttack;
         Vector3 selectedDirection, bufferedDirection;
+        readonly AttackPreparation preparation = new AttackPreparation();
         readonly SpecialAttackSelector attackSelector = new SpecialAttackSelector();
-        GUIStyle specialLabel;
+
         float invulnerableUntil;
         Vector3 knockback;
         WeaponVisual weapon;
         BloodSplatter blood;
         readonly HashSet<PracticeTarget> hit = new HashSet<PracticeTarget>();
         readonly Collider[] overlaps = new Collider[64];
+
+        public void Push(Vector3 direction, float speed)
+        {
+            knockback = Vector3.ProjectOnPlane(direction, Vector3.up).normalized * speed;
+        }
 
         void Awake()
         {
@@ -94,6 +106,25 @@ namespace Parry
             float dt = Time.deltaTime;
             var keyboard = Keyboard.current;
             var pad = Gamepad.current;
+            if (keyboard != null && !Attacking && !Rolling && !Guard.Disrupted)
+            {
+                WeaponStyle nextStyle = keyboard.digit1Key.wasPressedThisFrame ? WeaponStyle.Normal
+                    : keyboard.digit2Key.wasPressedThisFrame ? WeaponStyle.Thrusting : Style;
+                if (nextStyle != Style)
+                {
+                    Style = nextStyle;
+                    if (Style == WeaponStyle.Thrusting) preparation.Begin(Time.time);
+                    else preparation.Cancel();
+                    attackSelector.Cancel();
+                    buffered = false;
+                }
+            }
+            if (Style == WeaponStyle.Thrusting && !Attacking)
+            {
+                float waiting = preparation.Tick(Time.time);
+                bool paid = Guard.State.TrySpendForPreparation(preparationPressurePerSecond * waiting, Time.time);
+                if (!paid || !preparation.Active) ResetPreparation();
+            }
             Vector2 input = Vector2.zero;
             if (keyboard != null)
                 input = new Vector2((keyboard.dKey.isPressed || keyboard.rightArrowKey.isPressed ? 1 : 0) - (keyboard.aKey.isPressed || keyboard.leftArrowKey.isPressed ? 1 : 0),
@@ -103,7 +134,8 @@ namespace Parry
             Vector3 right = Vector3.ProjectOnPlane(view.transform.right, Vector3.up).normalized;
             Vector3 forward = Vector3.ProjectOnPlane(view.transform.forward, Vector3.up).normalized;
             Vector3 move = right * input.x + forward * input.y;
-            if (!Attacking && !Rolling && !attackSelector.Holding)
+            if (!Attacking && !Rolling && !attackSelector.Holding
+                && !(buffered && bufferedAttack == AttackChoice.Lunge))
             {
                 if (move.sqrMagnitude > .01f) Facing = move.normalized;
                 if (Mouse.current != null)
@@ -123,7 +155,8 @@ namespace Parry
             }
             bool wantsBlock = (Mouse.current != null && Mouse.current.rightButton.isPressed)
                 || (keyboard != null && keyboard.kKey.isPressed) || (pad != null && pad.leftShoulder.isPressed);
-            Guard.Tick(wantsBlock && !Attacking && !Rolling, Facing);
+            if (wantsBlock && (Style == WeaponStyle.Thrusting || UnblockableAttack)) CancelAttack();
+            Guard.Tick(wantsBlock && WeaponStyleOptions.Sword(Style).CanGuard && !Attacking && !Rolling, Facing);
             if (Guard.Disrupted)
             {
                 CancelAttack();
@@ -135,45 +168,51 @@ namespace Parry
                 || (keyboard != null && keyboard.jKey.wasPressedThisFrame) || (pad != null && pad.buttonWest.wasPressedThisFrame);
             bool attackHeld = (Mouse.current != null && Mouse.current.leftButton.isPressed)
                 || (keyboard != null && keyboard.jKey.isPressed) || (pad != null && pad.buttonWest.isPressed);
-            Vector2 pointer = Mouse.current != null ? Mouse.current.position.ReadValue() : new Vector2(Screen.width / 2f, Screen.height / 2f);
-            if (attackPressed && !Guard.Blocking && !Guard.Disrupted && !Rolling)
+            if (attackPressed && !Guard.Blocking && !Guard.Disrupted && !Rolling && !UnblockableAttack)
             {
                 buffered = false;
-                attackSelector.Begin(Time.unscaledTime, pointer.x, pointer.y);
+                AttackChoice pressedChoice = attackSelector.Begin(WeaponStyleOptions.Sword(Style));
                 selectedDirection = Facing;
+                if (pressedChoice != AttackChoice.None)
+                {
+                    buffered = true;
+                    bufferedUntil = Time.time + preparation.RemainingWindup(Time.time, lungeWindup) + .18f;
+                    bufferedAttack = pressedChoice; bufferedDirection = selectedDirection;
+                }
             }
             if (Guard.Blocking || Guard.Disrupted || Rolling) attackSelector.Cancel();
-            if (keyboard != null && keyboard.escapeKey.wasPressedThisFrame) attackSelector.Cancel();
-            if (attackSelector.Holding)
+            if (keyboard != null && keyboard.escapeKey.wasPressedThisFrame) ResetPreparation();
+            if (attackSelector.Holding && !attackHeld)
             {
-                // Right-stick movement also selects the same upper sector when using a gamepad.
-                if (pad != null && pad.rightStick.ReadValue().sqrMagnitude > .1f)
-                    pointer = new Vector2(attackSelector.OriginX, attackSelector.OriginY) + pad.rightStick.ReadValue() * 80;
-                attackSelector.Update(Time.unscaledTime, pointer.x, pointer.y);
-                if (!attackHeld)
+                AttackChoice choice = attackSelector.Release();
+                if (choice != AttackChoice.None)
                 {
-                    AttackChoice choice = attackSelector.Release(Time.unscaledTime, pointer.x, pointer.y);
-                    if (choice != AttackChoice.None)
-                    {
-                        buffered = true; bufferedUntil = Time.time + .18f;
-                        bufferedAttack = choice; bufferedDirection = selectedDirection;
-                    }
+                    buffered = true; bufferedUntil = Time.time + .18f;
+                    bufferedAttack = choice; bufferedDirection = selectedDirection;
                 }
             }
             bool rollPressed = (keyboard != null && keyboard.spaceKey.wasPressedThisFrame) || (pad != null && pad.buttonSouth.wasPressedThisFrame);
             if (rollPressed) TryRoll(move);
             if (buffered && Time.time > bufferedUntil) buffered = false;
             if (Guard.Blocking || Guard.Disrupted) buffered = false;
-            if (buffered && !Attacking && !Rolling)
+            if (buffered && !Attacking && !Rolling
+                && (bufferedAttack != AttackChoice.Lunge || preparation.Ready(Time.time, lungeWindup)))
             {
                 buffered = false;
-                activeAttack = bufferedAttack;
-                attackRemaining = CurrentWindup + CurrentActive + CurrentRecovery;
-                attackDirection = bufferedDirection;
-                Facing = attackDirection;
-                Guard.State.RecordCombat(Time.time);
-                hit.Clear();
-                swingSoundPlayed = false;
+                // Pay once when releasing the prepared strike, including misses or interrupted strikes.
+                if (bufferedAttack != AttackChoice.Lunge
+                    || Guard.State.TrySpendForStrongAttack(strongAttackPressure, Time.time))
+                {
+                    activeAttack = bufferedAttack;
+                    preparation.Cancel();
+                    attackRemaining = CurrentWindup + CurrentActive + CurrentRecovery;
+                    attackDirection = bufferedDirection;
+                    Facing = attackDirection;
+                    Guard.State.RecordCombat(Time.time);
+                    hit.Clear();
+                    swingSoundPlayed = false;
+                }
+                else ResetPreparation();
             }
             if (Rolling)
             {
@@ -183,7 +222,7 @@ namespace Parry
             }
             else
             {
-                velocity = Vector3.MoveTowards(velocity, move * speed * (UnblockableAttack ? 0 : Attacking ? .25f : Guard.Blocking ? .45f : attackSelector.MenuOpen ? .4f : 1), acceleration * dt);
+                velocity = Vector3.MoveTowards(velocity, move * speed * (UnblockableAttack ? 0 : Attacking ? .25f : Guard.Blocking ? .45f : attackSelector.Holding ? .4f : 1), acceleration * dt);
                 controller.Move((velocity + Vector3.down * 2) * dt);
             }
             controller.Move(knockback * dt);
@@ -207,7 +246,14 @@ namespace Parry
                     }
                     else Strike();
                 }
+                bool finishedPowerfulStrike = UnblockableAttack && elapsed + dt >= CurrentWindup + CurrentActive;
                 attackRemaining = Mathf.Max(0, attackRemaining - dt);
+                if (finishedPowerfulStrike)
+                {
+                    Guard.State.CompleteStrongAttack(Time.time);
+                    if (Guard.Disrupted) CancelAttack();
+                }
+                if (!Attacking && activeAttack == AttackChoice.Lunge) ResetPreparation();
             }
             if (visual != null)
             {
@@ -225,19 +271,25 @@ namespace Parry
         {
             float elapsed = CurrentWindup + CurrentActive + CurrentRecovery - attackRemaining;
             float swing = Attacking && elapsed >= CurrentWindup ? Mathf.Clamp01((elapsed - CurrentWindup) / CurrentActive) : -1;
-            float prepare = Attacking && elapsed < CurrentWindup ? elapsed / CurrentWindup : 0;
+            bool preparingLunge = PreparingPowerfulAttack;
+            float prepare = preparingLunge ? preparation.WindupProgress(Time.time, lungeWindup)
+                : Attacking && elapsed < CurrentWindup ? elapsed / CurrentWindup : 0;
             float returnToReady = Attacking ? Mathf.Clamp01((elapsed - CurrentWindup - CurrentActive) / CurrentRecovery) : 0;
             Vector3 poseDirection = Attacking ? attackDirection : Facing;
             weapon.Pose(poseDirection, IsAlive && !Rolling, Guard.Blocking, Guard.Disrupted, swing, prepare,
-                CurrentReach, halfAngle, returnToReady, CircularStrike, UnblockableAttack);
+                preparingLunge ? AttackReach * .85f : CurrentReach, halfAngle, returnToReady, CircularStrike && !preparingLunge, ThrustAttack || preparingLunge, UnblockableAttack || preparingLunge,
+                Attacking ? ThrustAttack : Style == WeaponStyle.Thrusting);
+            weapon.ChargeGlint(prepare,
+                preparingLunge && IsAlive && !Rolling && !Guard.Disrupted && !Guard.Blocking);
             if (visual != null && IsAlive && !Rolling)
             {
                 float side = Vector3.Dot(poseDirection, view.transform.right);
-                float thrust = swing >= 0 ? Mathf.Sin(swing * Mathf.PI) : 0;
+                float thrust = swing >= 0 ? Mathf.Sin(Mathf.Pow(swing, .55f) * Mathf.PI) : 0;
+                float tension = Mathf.SmoothStep(0, 1, Mathf.Clamp01(prepare / .78f));
                 visual.flipX = side < 0;
                 visual.transform.rotation = view.transform.rotation * Quaternion.Euler(0, side * 18,
-                    side * (prepare * 8 - thrust * 10));
-                visual.transform.localPosition += poseDirection * (thrust * .1f - prepare * .07f);
+                    side * (tension * 13 - thrust * 15));
+                visual.transform.localPosition += poseDirection * (thrust * .16f - tension * .13f);
             }
             slash.enabled = IsAlive && (arena == null || arena.ShowAttackRangeIndicators);
             if (slash.enabled)
@@ -256,17 +308,25 @@ namespace Parry
             nextRoll = Time.time + rollCooldown;
             direction = Vector3.ProjectOnPlane(direction, Vector3.up);
             rollDirection = direction.sqrMagnitude > .01f ? direction.normalized : Facing;
-            buffered = false;
-            attackSelector.Cancel();
+            ResetPreparation();
             CombatAudio.Play(CombatSound.Roll, transform.position);
             return true;
         }
 
-        void CancelAttack()
+        void ResetPreparation()
         {
-            attackRemaining = 0;
+            Style = WeaponStyle.Normal;
+            preparation.Cancel();
             buffered = false;
             attackSelector.Cancel();
+        }
+
+        void CancelAttack()
+        {
+            Guard.State.CompleteStrongAttack(Time.time);
+            ResetPreparation();
+            activeAttack = AttackChoice.None;
+            attackRemaining = 0;
             slash.enabled = false;
         }
 
@@ -289,10 +349,7 @@ namespace Parry
             blood.Burst(transform.position + Vector3.up * .8f, direction);
             invulnerableUntil = Time.time + hurtInvulnerability;
             knockback = Vector3.ProjectOnPlane(direction, Vector3.up).normalized * 6;
-            attackRemaining = 0;
-            buffered = false;
-            attackSelector.Cancel();
-            slash.enabled = false;
+            CancelAttack();
             if (!IsAlive)
             {
                 velocity = knockback = Vector3.zero;
@@ -308,6 +365,7 @@ namespace Parry
             transform.position = Vector3.zero;
             controller.enabled = true;
             Health = maxHealth;
+            ResetPreparation();
             Guard.ResetCombat();
             velocity = knockback = Vector3.zero;
             attackRemaining = rollRemaining = 0;
@@ -334,9 +392,13 @@ namespace Parry
             for (int i = 0; i < count; i++)
             {
                 var target = overlaps[i].GetComponentInParent<PracticeTarget>();
-                if (target == null || hit.Contains(target)) continue;
+                if (target == null || !target.IsAlive || hit.Contains(target)) continue;
+                var enemy = target.GetComponent<EnemyBrain>();
+                // Invulnerability does not consume this swing's one accepted contact.
+                // If the roll ends during the active window, the weapon can still connect.
+                if (enemy != null && enemy.Rolling) continue;
                 Vector3 delta = Vector3.ProjectOnPlane(target.transform.position - transform.position, Vector3.up);
-                if (UnblockableAttack)
+                if (ThrustAttack)
                 {
                     float along = Vector3.Dot(delta, attackDirection);
                     float width = lungeWidth + .35f;
@@ -346,7 +408,6 @@ namespace Parry
                 // Walls block attacks. Target colliders are triggers and ignored by this ray.
                 if (Physics.Raycast(transform.position + Vector3.up * .65f, delta.normalized, delta.magnitude, ~0, QueryTriggerInteraction.Ignore)) continue;
                 hit.Add(target);
-                var enemy = target.GetComponent<EnemyBrain>();
                 Vector3 hitDirection = CircularStrike && delta.sqrMagnitude > .001f ? delta.normalized : attackDirection;
                 if (enemy != null) enemy.ReceiveAttack(damage, hitDirection, Guard, UnblockableAttack);
                 else target.TakeHit(damage, hitDirection);
@@ -365,7 +426,7 @@ namespace Parry
             for (int i = 0; i < segments; i++)
             {
                 float angle = heading + (CircularStrike ? i * Mathf.PI * 2 / segments
-                    : Mathf.Lerp(UnblockableAttack ? -8 : -halfAngle, UnblockableAttack ? 8 : halfAngle, i / (float)(segments - 1)) * Mathf.Deg2Rad);
+                    : Mathf.Lerp(ThrustAttack ? -8 : -halfAngle, ThrustAttack ? 8 : halfAngle, i / (float)(segments - 1)) * Mathf.Deg2Rad);
                 slash.SetPosition(i, transform.position + new Vector3(Mathf.Cos(angle), 0, Mathf.Sin(angle)) * (CurrentReach * (.8f + progress * .2f)) + Vector3.up * .4f);
             }
             slash.startColor = slash.endColor = new Color(1, .87f, .6f, 1 - progress * .7f);
@@ -373,29 +434,26 @@ namespace Parry
 
         void OnGUI()
         {
-            if (!attackSelector.MenuOpen || !IsAlive) return;
-            if (specialLabel == null)
-                specialLabel = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, fontSize = 13, wordWrap = true };
-            float x = Mathf.Clamp(attackSelector.OriginX, 120, Mathf.Max(120, Screen.width - 120));
-            float y = Mathf.Clamp(Screen.height - attackSelector.OriginY, 115, Mathf.Max(115, Screen.height - 90));
-            GUI.Box(new Rect(x - 116, y - 108, 232, 184), GUIContent.none);
-            Color previous = GUI.color;
-            GUI.color = attackSelector.Selected == AttackChoice.Lunge ? new Color(1, .55f, .2f) : new Color(.8f, .82f, .85f);
-            GUI.Box(new Rect(x - 83, y - 98, 166, 63), GUIContent.none);
-            GUI.Label(new Rect(x - 83, y - 98, 166, 63), "↑  LUNGE\nCannot be blocked or parried", specialLabel);
-            GUI.color = previous;
-            GUI.Label(new Rect(x - 105, y - 26, 210, 30), "•", specialLabel);
-            GUI.Label(new Rect(x - 108, y + 8, 216, 60), "Move mouse ↑ to select\nRelease attack to execute\nCenter / Esc: cancel", specialLabel);
+            if (!IsAlive) return;
+            GUI.Label(new Rect(22, 94, 430, 24), Style == WeaponStyle.Normal
+                ? "[1] NORMAL: slash / guard   (no strong attack)"
+                : $"[2] PREPARED: click attack ({strongAttackPressure:0} STA), waiting costs {preparationPressurePerSecond:0} STA/s");
         }
 
-        void OnDisable() => attackSelector.Cancel();
+        void OnDisable()
+        {
+            if (Guard != null) Guard.State.CompleteStrongAttack(Time.time);
+            ResetPreparation();
+            if (weapon != null) weapon.ChargeGlint(0, false);
+        }
 
         void OnApplicationFocus(bool focused)
         {
             if (!focused)
             {
                 buffered = false; velocity = Vector3.zero;
-                attackSelector.Cancel();
+                if (Guard != null) Guard.State.CompleteStrongAttack(Time.time);
+                ResetPreparation();
                 if (Guard != null) Guard.State.SetBlocking(false, Time.time);
             }
         }

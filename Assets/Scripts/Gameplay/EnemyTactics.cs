@@ -5,6 +5,8 @@ namespace Parry
     // Recovery has hysteresis, but immediate danger can override an attack commitment.
     public sealed class EnemyTactics
     {
+        public const float OpponentWeaknessThreshold = 70;
+        public bool ExploitingWeakness { get; private set; }
         public const float RetreatThreshold = 70;
         public const float ReengageThreshold = 35;
         public const float MinimumRetreatDuration = .8f;
@@ -18,7 +20,7 @@ namespace Parry
         bool sampled;
 
         public void Update(float pressure, float now, float fatigue = 0, int endurance = 100,
-            bool threatened = false, bool opening = false)
+            bool threatened = false, bool opening = false, float opponentPressure = 0, bool opponentDisrupted = false)
         {
             float elapsed = sampled ? Math.Max(0, now - lastUpdate) : 0;
             recentGain = Math.Max(0, recentGain - elapsed * 25);
@@ -26,6 +28,14 @@ namespace Parry
             lastPressure = pressure;
             lastUpdate = now;
             sampled = true;
+            // A vulnerable opponent takes priority over conserving our own reserve.
+            ExploitingWeakness = opponentDisrupted || opponentPressure >= OpponentWeaknessThreshold;
+            if (ExploitingWeakness)
+            {
+                Retreating = UrgentRetreat = false;
+                Aggressive = true;
+                return;
+            }
             float fatigueRisk = Math.Min(12, Math.Max(0, fatigue) * 2);
             float reserve = 100f / Math.Max(1, endurance);
             float entry = RetreatThreshold - fatigueRisk - Math.Min(10, recentGain * .4f);
@@ -52,7 +62,7 @@ namespace Parry
         public void Reengage(float pressure, float now)
         {
             Retreating = false;
-            Aggressive = !UrgentRetreat && pressure <= AggressiveThreshold;
+            Aggressive = ExploitingWeakness || (!UrgentRetreat && pressure <= AggressiveThreshold);
             reengageUntil = now + AttackCommitmentDuration;
         }
 
@@ -62,7 +72,7 @@ namespace Parry
 
         public void Reset()
         {
-            Retreating = UrgentRetreat = sampled = false;
+            Retreating = UrgentRetreat = sampled = ExploitingWeakness = false;
             Aggressive = true;
             retreatUntil = reengageUntil = recentGain = lastPressure = lastUpdate = 0;
         }

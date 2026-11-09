@@ -27,12 +27,17 @@ namespace Parry
             State.SetBlocking(wantsBlock, Time.time);
             State.Tick(Time.deltaTime, Time.time);
         }
-        public DefenseResult Defend(CombatGuard attacker, Vector3 incomingDirection, bool allowParry = true)
+        public DefenseResult Defend(CombatGuard attacker, Vector3 incomingDirection, bool allowParry = true, bool powerful = false)
         {
             if (!Blocking || Disrupted || Vector3.Angle(Facing, -incomingDirection) > 70) return DefenseResult.Hit;
             if (allowParry && State.CanParry(Time.time))
             {
                 State.Deflect(Time.time);
+                if (powerful)
+                {
+                    State.AddPressure(80, Time.time);
+                    PushApart(attacker, incomingDirection);
+                }
                 if (attacker != null)
                 {
                     attacker.State.AddPressure(45, Time.time);
@@ -45,10 +50,28 @@ namespace Parry
                 return DefenseResult.Parry;
             }
             State.AddPressure(28, Time.time);
+            if (powerful)
+            {
+                PushApart(attacker, incomingDirection);
+                // Stop forward travel so it cannot swallow the attacker's backward impulse.
+                if (attacker != null) attacker.State.Recoil(Time.time);
+            }
             Signal(Broken ? "GUARD BROKEN" : "BLOCK", false);
             CombatAudio.Play(CombatSound.Block, transform.position);
             sparks.Burst(transform.position + Facing * .65f + Vector3.up * .85f, incomingDirection, false);
             return DefenseResult.Block;
+        }
+        void PushApart(CombatGuard attacker, Vector3 direction)
+        {
+            Push(direction, 12);
+            if (attacker != null) attacker.Push(-direction, 12);
+        }
+        void Push(Vector3 direction, float speed)
+        {
+            var target = GetComponent<PracticeTarget>();
+            if (target != null) target.Push(direction, speed);
+            var player = GetComponent<PlayerMotor>();
+            if (player != null) player.Push(direction, speed);
         }
         public void OnHit() { State.AddPressure(22, Time.time); }
         public void ResetCombat() { State.Reset(); feedbackUntil = 0; wasBroken = false; }
