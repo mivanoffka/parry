@@ -47,6 +47,7 @@ namespace Parry
             State.AddPressure(28, Time.time);
             Signal(Broken ? "GUARD BROKEN" : "BLOCK", false);
             CombatAudio.Play(CombatSound.Block, transform.position);
+            sparks.Burst(transform.position + Facing * .65f + Vector3.up * .85f, incomingDirection, false);
             return DefenseResult.Block;
         }
         public void OnHit() { State.AddPressure(22, Time.time); }
@@ -75,7 +76,7 @@ namespace Parry
                 flash.SetPosition(i * 2, center + ray * .06f);
                 flash.SetPosition(i * 2 + 1, center + ray * (parry ? .65f : .3f));
             }
-            flash.startColor = flash.endColor = parry ? new Color(1, .8f, .2f) : Color.white;
+            flash.startColor = flash.endColor = parry ? new Color(1, .75f, .15f) : new Color(.45f, .07f, .015f);
         }
         void LateUpdate()
         {

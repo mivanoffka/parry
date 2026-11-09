@@ -7,5 +7,6 @@
   <ItemGroup>
     <Compile Include="../../Assets/Scripts/Gameplay/PostureState.cs" Link="PostureState.cs" />
     <Compile Include="../../Assets/Scripts/Gameplay/EnemyTactics.cs" Link="EnemyTactics.cs" />
+    <Compile Include="../../Assets/Scripts/Gameplay/SpecialAttackSelector.cs" Link="SpecialAttackSelector.cs" />
   </ItemGroup>
 </Project>

@@ -33,7 +33,7 @@ Material:
         m_Offset: {x: 0, y: 0}
     m_Ints: []
     m_Floats:
-    - _Ambient: 0.28
+    - _Ambient: 0.12
     - _Gloss: 36
     - _NormalStrength: 1
     - _Specular: 0.16

@@ -1,39 +1,70 @@
+using System;
+
 namespace Parry
 {
-    // Separate enter/exit thresholds prevent the enemy from oscillating between chase and retreat.
+    // Recovery has hysteresis, but immediate danger can override an attack commitment.
     public sealed class EnemyTactics
     {
-        public const float RetreatThreshold = 75;
-        public const float ReengageThreshold = 45;
+        public const float RetreatThreshold = 70;
+        public const float ReengageThreshold = 35;
         public const float MinimumRetreatDuration = .8f;
-        public const float MaximumRetreatDuration = 2.5f;
-        public const float AttackCommitmentDuration = 3;
-        public const float AggressiveThreshold = 65;
+        public const float AttackCommitmentDuration = .6f;
+        public const float AggressiveThreshold = 55;
         public bool Retreating { get; private set; }
         public bool Aggressive { get; private set; } = true;
+        public bool UrgentRetreat { get; private set; }
 
-        float retreatUntil, retreatDeadline, reengageUntil;
-        public void Update(float pressure, float now)
+        float retreatUntil, reengageUntil, recentGain, lastPressure, lastUpdate;
+        bool sampled;
+
+        public void Update(float pressure, float now, float fatigue = 0, int endurance = 100,
+            bool threatened = false, bool opening = false)
         {
+            float elapsed = sampled ? Math.Max(0, now - lastUpdate) : 0;
+            recentGain = Math.Max(0, recentGain - elapsed * 25);
+            if (sampled) recentGain = Math.Min(30, recentGain + Math.Max(0, pressure - lastPressure));
+            lastPressure = pressure;
+            lastUpdate = now;
+            sampled = true;
+            float fatigueRisk = Math.Min(12, Math.Max(0, fatigue) * 2);
+            float reserve = 100f / Math.Max(1, endurance);
+            float entry = RetreatThreshold - fatigueRisk - Math.Min(10, recentGain * .4f);
+            float exit = ReengageThreshold - fatigueRisk * .5f;
+            // Keep enough concentration for an ordinary block, or the penalty for a parried attack.
+            UrgentRetreat = pressure >= 90 || (threatened && pressure + 28 * reserve >= 95);
+            bool vulnerable = pressure >= entry || (pressure >= 60 && pressure + 45 * reserve >= 100);
+            bool canExploitOpening = opening && !threatened && pressure < 75
+                && pressure + 45 * reserve < 90 && fatigue < 4;
+
             if (Retreating)
             {
-                if ((pressure <= ReengageThreshold && now >= retreatUntil) || now >= retreatDeadline)
+                if (!UrgentRetreat && pressure <= exit && now >= retreatUntil)
                     Reengage(pressure, now);
             }
-            else if (pressure >= RetreatThreshold && now >= reengageUntil)
+            else if (UrgentRetreat || (vulnerable && !canExploitOpening && now >= reengageUntil))
             {
                 Retreating = true;
                 retreatUntil = now + MinimumRetreatDuration;
-                retreatDeadline = now + MaximumRetreatDuration;
             }
-            Aggressive = !Retreating && pressure <= AggressiveThreshold;
+            Aggressive = !Retreating && !UrgentRetreat && pressure <= AggressiveThreshold - fatigueRisk;
         }
+
         public void Reengage(float pressure, float now)
         {
             Retreating = false;
-            Aggressive = pressure <= AggressiveThreshold;
+            Aggressive = !UrgentRetreat && pressure <= AggressiveThreshold;
             reengageUntil = now + AttackCommitmentDuration;
         }
-        public void Reset() { Retreating = false; Aggressive = true; retreatUntil = retreatDeadline = reengageUntil = 0; }
+
+        public bool CanCounterattack(float pressure, int endurance, bool opening) =>
+            Retreating && opening && !UrgentRetreat && pressure <= AggressiveThreshold
+            && pressure + 45 * (100f / Math.Max(1, endurance)) < 90;
+
+        public void Reset()
+        {
+            Retreating = UrgentRetreat = sampled = false;
+            Aggressive = true;
+            retreatUntil = reengageUntil = recentGain = lastPressure = lastUpdate = 0;
+        }
     }
 }

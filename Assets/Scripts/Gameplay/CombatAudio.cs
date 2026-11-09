@@ -11,7 +11,7 @@ namespace Parry
         readonly AudioClip[] clips = new AudioClip[8];
         readonly AudioSource[] voices = new AudioSource[VoiceCount];
         readonly float[] nextAllowed = new float[8];
-        static readonly float[] Levels = { .32f, .58f, .42f, .65f, .3f, .62f, .52f, .4f };
+        static readonly float[] Levels = { .32f, .58f, .25f, .78f, .3f, .62f, .52f, .4f };
         static CombatAudio instance;
         int nextVoice;
         public int PlayedSounds { get; private set; }
@@ -61,7 +61,8 @@ namespace Parry
             voice.transform.position = position;
             voice.clip = audio.clips[index];
             voice.volume = audio.volume * Levels[index];
-            voice.pitch = Random.Range(.94f, 1.06f);
+            voice.pitch = sound == CombatSound.Block ? Random.Range(.82f, .9f)
+                : sound == CombatSound.Parry ? Random.Range(1.02f, 1.08f) : Random.Range(.94f, 1.06f);
             voice.Play();
             audio.PlayedSounds++;
         }

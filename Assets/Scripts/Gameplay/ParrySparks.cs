@@ -10,6 +10,7 @@ namespace Parry
         ParticleSystem sparks, flare;
         Light flashLight;
         float flashUntil;
+        float flashPeak, flashDuration;
         static Material sparkMaterial;
 
         void Awake()
@@ -26,7 +27,7 @@ namespace Parry
                 }
                 glow.SetPixels(pixels); glow.Apply();
                 sparkMaterial.SetTexture("_MainTex", glow);
-                sparkMaterial.SetFloat("_Intensity", 9);
+                sparkMaterial.SetFloat("_Intensity", 16);
             }
             sparks = CreateEmitter("Metal fragments", true);
             flare = CreateEmitter("White-hot impact flash", false);
@@ -34,8 +35,9 @@ namespace Parry
             lightObject.transform.SetParent(transform, false);
             flashLight = lightObject.AddComponent<Light>();
             flashLight.type = LightType.Point;
+            flashLight.renderMode = LightRenderMode.ForcePixel;
             flashLight.color = new Color(1, .72f, .32f);
-            flashLight.range = 4;
+            flashLight.range = 5;
             flashLight.shadows = LightShadows.None;
             flashLight.enabled = false;
         }
@@ -81,13 +83,14 @@ namespace Parry
             return particles;
         }
 
-        public void Burst(Vector3 contact, Vector3 attackDirection)
+        public void Burst(Vector3 contact, Vector3 attackDirection, bool parry = true)
         {
+            Color impactColor = parry ? new Color(1, .72f, .16f) : new Color(.2f, .035f, .008f);
             var camera = Camera.main;
             Vector3 right = camera.transform.right, up = camera.transform.up;
             // Offset the hot core slightly toward the camera, clear of the sprite planes.
             contact -= camera.transform.forward * .18f;
-            for (int i = 0; i < sparkCount; i++)
+            for (int i = 0; i < (parry ? sparkCount : sparkCount / 3); i++)
             {
                 float angle = Random.Range(0, Mathf.PI * 2);
                 Vector3 spread = right * Mathf.Cos(angle) + up * Mathf.Sin(angle);
@@ -97,24 +100,27 @@ namespace Parry
                     velocity = (spread + attackDirection * Random.Range(-.18f, .32f)).normalized * Random.Range(speed * .45f, speed),
                     startLifetime = Random.Range(.22f, .6f),
                     startSize = Random.Range(.025f, .06f),
-                    startColor = Color.white
+                    startColor = impactColor
                 };
                 sparks.Emit(particle, 1);
             }
-            flare.Emit(new ParticleSystem.EmitParams { position = contact, startLifetime = .12f, startSize = 1.15f, startColor = Color.white }, 1);
+            flare.Emit(new ParticleSystem.EmitParams { position = contact, startLifetime = parry ? .16f : .1f, startSize = parry ? 1.5f : .7f, startColor = impactColor }, 1);
             // Emit() works on a stopped system; Play keeps its particle simulation advancing.
             if (!sparks.isPlaying) sparks.Play();
             if (!flare.isPlaying) flare.Play();
             flashLight.transform.position = contact - camera.transform.forward * .8f + Vector3.up * .2f;
-            flashLight.intensity = 6;
+            flashPeak = parry ? 18 : 4.5f;
+            flashDuration = parry ? .18f : .1f;
+            flashLight.color = parry ? new Color(1, .72f, .16f) : new Color(1, .16f, .025f);
+            flashLight.intensity = flashPeak;
             flashLight.enabled = true;
-            flashUntil = Time.time + .12f;
+            flashUntil = Time.time + flashDuration;
         }
         void Update()
         {
             if (!flashLight.enabled) return;
             float remaining = flashUntil - Time.time;
-            flashLight.intensity = 6 * Mathf.Clamp01(remaining / .12f);
+            flashLight.intensity = flashPeak * Mathf.Clamp01(remaining / flashDuration);
             if (remaining <= 0) flashLight.enabled = false;
         }
         void OnDisable()

@@ -5,7 +5,7 @@ Shader "Parry/Sprite Normal Lit"
         [PerRendererData] _MainTex("Sprite Texture", 2D) = "white" {}
         _NormalMap("RGB Normal Map (Linear)", 2D) = "bump" {}
         _NormalStrength("Normal Strength", Range(0, 2)) = 1
-        _Ambient("Ambient Fill", Range(0, 1)) = 0.28
+        _Ambient("Ambient Fill", Range(0, 1)) = 0.12
         _Specular("Specular Strength", Range(0, 2)) = 0.18
         _Gloss("Specular Exponent", Range(8, 128)) = 36
         [HideInInspector] _Color("Tint", Color) = (1,1,1,1)

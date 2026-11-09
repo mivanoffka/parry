@@ -28,9 +28,19 @@ def synthesize(name, duration):
             value = (white - filtered) * math.sin(math.pi * progress) ** 1.6 * .55
         elif name == "Roll":
             value = (filtered * 1.8 + white * .08) * math.sin(math.pi * progress) ** .7
-        elif name in ("Block", "Parry"):
-            frequencies = (620, 1130, 1870, 3100) if name == "Block" else (1150, 1870, 2930, 4370)
-            value = sum(math.sin(math.tau * frequency * time) * math.exp(-time * (7 + partial * 3))
+        elif name == "Block":
+            # Inharmonic steel resonances retain a metallic clang under heavy damping.
+            modes = ((470, .48, 20), (830, .36, 24), (1370, .27, 30),
+                     (2210, .17, 42), (3460, .09, 60))
+            value = sum(math.sin(math.tau * frequency * time) * weight * math.exp(-time * decay)
+                        for frequency, weight, decay in modes)
+            # Brief bright contact, followed by a muted resonant body rather than a thud.
+            value += (white - filtered) * .2 * math.exp(-time * 170)
+            value += filtered * .12 * math.exp(-time * 55)
+        elif name == "Parry":
+            # Bright inharmonic steel partials sustain after the sharp contact.
+            frequencies = (1150, 1870, 2930, 4370)
+            value = sum(math.sin(math.tau * frequency * time) * math.exp(-time * (4 + partial * 1.5))
                         / (partial + 2) for partial, frequency in enumerate(frequencies))
             value += white * .35 * math.exp(-time * 65)
         elif name == "Hit":
@@ -53,7 +63,9 @@ def synthesize(name, duration):
 
 def main():
     OUTPUT.mkdir(parents=True, exist_ok=True)
-    for name, duration in DURATIONS.items():
+    names = sys.argv[1:] or list(DURATIONS)
+    for name in names:
+        duration = DURATIONS[name]
         samples = synthesize(name, duration)
         pcm = array.array("h", (round(value * 32767) for value in samples))
         if sys.byteorder != "little":

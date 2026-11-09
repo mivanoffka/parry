@@ -229,6 +229,74 @@ namespace Parry.Editor
             EditorApplication.EnterPlaymode();
         }
 
+        public static void VerifyLunge()
+        {
+            PrepareRuntimeCheck();
+            EditorApplication.playModeStateChanged += state =>
+            {
+                if (state != PlayModeStateChange.EnteredPlayMode) return;
+                try
+                {
+                    var arena = UnityEngine.Object.FindAnyObjectByType<ArenaDemo>();
+                    var player = arena.GetComponentInChildren<PlayerMotor>();
+                    var enemy = arena.GetComponentInChildren<EnemyBrain>();
+                    player.enabled = enemy.enabled = false;
+                    var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                    var stateField = typeof(EnemyBrain).GetField("state", flags);
+                    var strike = typeof(PlayerMotor).GetMethod("Strike", flags);
+                    var hits = (HashSet<PracticeTarget>)typeof(PlayerMotor).GetField("hit", flags).GetValue(player);
+                    player.GetComponent<CharacterController>().enabled = false;
+                    player.transform.position = Vector3.zero;
+                    typeof(PlayerMotor).GetField("activeAttack", flags).SetValue(player, AttackChoice.Lunge);
+                    typeof(PlayerMotor).GetField("attackRemaining", flags).SetValue(player, .6f);
+                    typeof(PlayerMotor).GetField("attackDirection", flags).SetValue(player, Vector3.forward);
+                    enemy.transform.position = Vector3.forward * 1.5f;
+                    enemy.Health.ConfigureDurability(2, 0);
+                    enemy.Guard.ResetCombat();
+                    enemy.Guard.SetFacing(Vector3.back);
+                    enemy.Guard.State.SetBlocking(true, Time.time);
+                    Physics.SyncTransforms();
+                    strike.Invoke(player, null);
+                    strike.Invoke(player, null);
+                    if (enemy.Health.Health != 1 || enemy.Guard.Disrupted || player.Guard.Disrupted)
+                        throw new InvalidOperationException("Lunge was blocked, parried or hit more than once.");
+
+                    enemy.Health.ConfigureDurability(2, 0);
+                    hits.Clear();
+                    stateField.SetValue(enemy, Enum.Parse(stateField.FieldType, "Roll"));
+                    strike.Invoke(player, null);
+                    if (enemy.Health.Health != 2)
+                        throw new InvalidOperationException("Lunge bypassed roll invulnerability.");
+
+                    hits.Clear();
+                    stateField.SetValue(enemy, Enum.Parse(stateField.FieldType, "Guard"));
+                    enemy.transform.position = new Vector3(1.3f, 0, 1);
+                    Physics.SyncTransforms();
+                    strike.Invoke(player, null);
+                    if (enemy.Health.Health != 2)
+                        throw new InvalidOperationException("Lunge hit a target outside its narrow lane.");
+
+                    enemy.transform.position = Vector3.forward * 1.5f;
+                    var wall = new GameObject("Lunge test wall");
+                    wall.transform.position = new Vector3(0, 1, .75f);
+                    wall.AddComponent<BoxCollider>().size = new Vector3(1, 2, .1f);
+                    hits.Clear();
+                    Physics.SyncTransforms();
+                    strike.Invoke(player, null);
+                    if (enemy.Health.Health != 2)
+                        throw new InvalidOperationException("Lunge passed through a solid wall.");
+                    Debug.Log("PARRY LUNGE BLOCK/PARRY, DODGE, LANE AND WALL CHECK PASSED");
+                    EditorApplication.Exit(0);
+                }
+                catch (Exception error)
+                {
+                    Debug.LogException(error);
+                    EditorApplication.Exit(1);
+                }
+            };
+            EditorApplication.EnterPlaymode();
+        }
+
         public static void VerifyAudio()
         {
             PrepareRuntimeCheck();
