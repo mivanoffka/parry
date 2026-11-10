@@ -9,6 +9,8 @@ namespace Parry
         public float SwingProgress { get; private set; } = -1;
         public float RecoveryProgress { get; private set; }
         SpriteRenderer blade;
+        float relaxationBlend;
+        public float RelaxationBlend => relaxationBlend;
         static Sprite sword;
         static Material chargeMaterial;
         LineRenderer chargeHalo, chargeCore, glintHorizontal, glintVertical;
@@ -112,13 +114,13 @@ namespace Parry
         }
 
         public void Pose(Vector3 facing, bool visible, bool blocking, bool broken, float swing = -1, float windup = 0,
-            float reach = 2.5f, float halfAngle = 35, float recovery = 0, bool circular = false, bool lunge = false, bool powerful = false, bool thrustStance = false)
+            float reach = 2.5f, float halfAngle = 35, float recovery = 0, bool circular = false, bool lunge = false, bool powerful = false, bool thrustStance = false, bool relaxing = false)
         {
             blade.enabled = visible;
             WindupProgress = windup;
             SwingProgress = swing;
             RecoveryProgress = recovery;
-            if (!visible) return;
+            if (!visible) { relaxationBlend = 0; return; }
             Camera camera = Camera.main;
             Vector3 right = camera.transform.right;
             facing = Vector3.ProjectOnPlane(facing, Vector3.up).normalized;
@@ -181,6 +183,18 @@ namespace Parry
                 float bladeLength = (61 - 64 * .16f) / 48;
                 float lengthScale = projectedBlade.magnitude / bladeLength;
                 transform.localScale = new Vector3(1, Mathf.Lerp(1, lengthScale, blend), 1);
+            }
+            relaxationBlend = broken || !visible ? 0 : Mathf.MoveTowards(relaxationBlend, relaxing ? 1 : 0, Time.deltaTime * 6);
+            if (relaxationBlend > 0)
+            {
+                Vector3 lateral = Vector3.Cross(Vector3.up, facing).normalized;
+                Vector3 stretchDirection = (lateral - facing * .25f).normalized;
+                Vector3 projected = Vector3.ProjectOnPlane(stretchDirection, camera.transform.forward);
+                float angle = Mathf.Atan2(-Vector3.Dot(projected, right), Vector3.Dot(projected, camera.transform.up)) * Mathf.Rad2Deg;
+                Vector3 grip = transform.parent.position + Vector3.up * .75f + lateral * .65f - camera.transform.forward * .15f;
+                transform.position = Vector3.Lerp(transform.position, grip, relaxationBlend);
+                transform.rotation = Quaternion.Slerp(transform.rotation, camera.transform.rotation * Quaternion.Euler(0, 0, angle), relaxationBlend);
+                transform.localScale = Vector3.Lerp(transform.localScale, Vector3.one, relaxationBlend);
             }
             blade.color = broken ? new Color(.5f, .5f, .5f) : powerful ? Color.white
                 : blocking ? new Color(1, .85f, .55f) : Color.white;

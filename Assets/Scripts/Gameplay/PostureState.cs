@@ -55,6 +55,35 @@ namespace Parry
         float NormalizeCost(float points) => points * Maximum / EndurancePoints;
         public float RecoveryMultiplier => Pressure > 67 ? 4 : Pressure > 33 ? 2 : 1;
         public bool Blocking { get; private set; }
+        public bool Relaxing { get; private set; }
+        public bool GuardTransition { get; private set; }
+        public const float RelaxedGuardRaiseDuration = .2f;
+        bool slowExitPending;
+        float relaxedGuardReadyAt;
+        public bool BeginRelaxation(float now)
+        {
+            if (Disrupted(now) || strongAttackBreakPending || GuardTransition) return false;
+            Relaxing = slowExitPending = true;
+            Blocking = false;
+            return true;
+        }
+        // Manually lowering the stretch does not erase the next-action preparation penalty.
+        public void LeaveRelaxation() { Relaxing = false; }
+        public float ExitRelaxationForAttack()
+        {
+            float multiplier = Relaxing || slowExitPending || GuardTransition ? 2 : 1;
+            CancelRelaxation();
+            return multiplier;
+        }
+        public void CancelRelaxation()
+        {
+            Relaxing = slowExitPending = GuardTransition = false;
+            relaxedGuardReadyAt = 0;
+        }
+        float attacksBlockedUntil;
+        public bool CanAttack(float now) => now >= attacksBlockedUntil && !Disrupted(now);
+        public void DelayAttacks(float duration, float now) =>
+            attacksBlockedUntil = Math.Max(attacksBlockedUntil, now + Math.Max(0, duration));
         public bool Broken(float now) => now < brokenUntil;
         public bool Disrupted(float now) => Broken(now) || now < recoilUntil;
         public bool CanParry(float now) => Blocking && now < parryUntil && !Disrupted(now);
@@ -68,6 +97,19 @@ namespace Parry
         public void SetBlocking(bool blocking, float now)
         {
             blocking &= !Disrupted(now);
+            if (!blocking) GuardTransition = false;
+            else if (Relaxing || slowExitPending || GuardTransition)
+            {
+                if (!GuardTransition)
+                {
+                    Relaxing = false;
+                    slowExitPending = GuardTransition = true;
+                    relaxedGuardReadyAt = now + RelaxedGuardRaiseDuration;
+                    RecordCombat(now);
+                }
+                if (now < relaxedGuardReadyAt) { Blocking = false; return; }
+                GuardTransition = slowExitPending = false;
+            }
             if (blocking && !Blocking)
             {
                 guardRaisedAt = now;
@@ -95,7 +137,16 @@ namespace Parry
             {
                 brokenUntil = now + 1.25f;
                 Blocking = false;
+                CancelRelaxation();
             }
+        }
+        public void Block(float now, bool powerful = false)
+        {
+            AddPressure(28, now);
+            if (!powerful) return;
+            brokenUntil = Math.Max(brokenUntil, now + 1.25f);
+            Blocking = false;
+            CancelRelaxation();
         }
         public void Parry(float now, bool powerful = false)
         {
@@ -110,19 +161,23 @@ namespace Parry
             parryUntil = now;
             parryArmed = false;
         }
-        public void Recoil(float now) { RecordCombat(now); recoilUntil = Math.Max(recoilUntil, now + .35f); Blocking = false; }
+        public void Recoil(float now) { CancelRelaxation(); RecordCombat(now); recoilUntil = Math.Max(recoilUntil, now + .35f); Blocking = false; }
         public bool TryEmergencyGuard(float pressureCost, float now)
         {
             if (Disrupted(now)) return false;
+            if (GuardTransition) { SetBlocking(true, now); return Blocking; }
             AddPressure(pressureCost, now);
             SetBlocking(true, now);
             return Blocking;
         }
+        public bool TrySpendForAttack(float pressureCost, float now) =>
+            CanAttack(now) && TrySpendConcentration(pressureCost, now);
         public bool TrySpendForRoll(float pressureCost, float now) => TrySpendConcentration(pressureCost, now);
         public bool TrySpendForPreparation(float pressureCost, float now) => TrySpendConcentration(pressureCost, now);
         public bool TrySpendForStrongAttack(float pressureCost, float now)
         {
             if (pressureCost < 0 || Disrupted(now) || strongAttackBreakPending) return false;
+            CancelRelaxation();
             RecordCombat(now);
             Blocking = false;
             strongAttackBreakPending = pressureCost >= RemainingEndurance;
@@ -142,6 +197,7 @@ namespace Parry
         bool TrySpendConcentration(float pressureCost, float now)
         {
             if (!CanSpendForRoll(pressureCost, now)) return false;
+            CancelRelaxation();
             AddPressure(pressureCost, now);
             RecordCombat(now);
             SetBlocking(false, now);
@@ -155,7 +211,7 @@ namespace Parry
             bool resting = now > recoverAfter && !Disrupted(now) && !strongAttackBreakPending;
             if (Broken(now)) return;
             if (resting)
-                Recover(NormalizeCost((Blocking ? 28 : 18) * elapsed));
+                Recover(NormalizeCost((Blocking ? 28 : 18) * elapsed * (Relaxing ? 2.5f : 1)));
         }
         void Recover(float budget)
         {
@@ -172,10 +228,11 @@ namespace Parry
         }
         public void Reset()
         {
-            Pressure = brokenUntil = recoilUntil = parryUntil = nextParry = recoverAfter = 0;
+            Pressure = brokenUntil = recoilUntil = parryUntil = nextParry = recoverAfter = attacksBlockedUntil = 0;
             Blocking = false;
             strongAttackBreakPending = parryArmed = anticipatedAttack = false;
             guardRaisedAt = 0;
+            CancelRelaxation();
         }
     }
 }

@@ -23,6 +23,15 @@ namespace Parry
                 K(3, -18, 0, 18, 0, -18), K(4, 18, 0, -18, 0, 18),
                 K(5, 0, -5, 0, 0, 0), K(6, 0, 0, 0, -5, 0)
             }, .31f, .31f, .31f, .31f, .31f);
+            Clip("Relax", 2.4f, true, new[] {
+                K(0, -3, -5, -3), K(1, 3, 5, 3), K(2, -2, 2, -2),
+                K(3, -15, -19, -15), K(4, 78, 84, 78), K(5, -3, -3, -3), K(6, 3, 3, 3)
+            }, .31f, .32f, .31f);
+            Clip("RelaxWalk", 1.2f, true, new[] {
+                K(0, -3, -4, -3, -4, -3), K(1, 3, 4, 3, 4, 3), K(2, -2, 2, -2, 2, -2),
+                K(3, -15, -19, -15, -19, -15), K(4, 78, 84, 78, 84, 78),
+                K(5, 0, -3, 0, 0, 0), K(6, 0, 0, 0, -3, 0)
+            }, .31f, .31f, .31f, .31f, .31f);
             Clip("Guard", 1, true, new[] {
                 K(0, -4, -5, -4), K(1, 4, 5, 4), K(2, 4, 6, 4),
                 K(3, -55, -58, -55), K(4, 55, 58, 55), K(5, -8, -8, -8), K(6, 8, 8, 8)
@@ -96,9 +105,9 @@ namespace Parry
             for (int k = 0; k < hips.Length; k++) height.AddKey(k * duration / (hips.Length - 1), hips[k]);
             clip.SetCurve("Hips", typeof(Transform), "localPosition.y", height);
             // Translate each whole leg through a swing arc; the support foot stays flat.
-            bool walking = name == "Walk" || name == "GuardWalk";
-            float stride = name == "GuardWalk" ? .035f : .055f;
-            float lift = name == "GuardWalk" ? .075f : .11f;
+            bool walking = name == "Walk" || name == "GuardWalk" || name == "RelaxWalk";
+            float stride = name == "Walk" ? .055f : .035f;
+            float lift = name == "Walk" ? .11f : .075f;
             for (int side = 0; side < 2; side++)
             {
                 var horizontal = new AnimationCurve();

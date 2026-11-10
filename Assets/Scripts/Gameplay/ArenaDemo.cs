@@ -31,6 +31,8 @@ namespace Parry
         ColorAdjustments healthFilter;
         LensDistortion concentrationDistortion;
         ChromaticAberration concentrationDoubleVision;
+        Vignette smokeVignette;
+        float smokeEffect;
         float healthEffect, concentrationEffect;
         readonly Vector3 cameraOffset = new Vector3(0, 13, -16);
         GUIStyle controlsLabel;
@@ -45,6 +47,11 @@ namespace Parry
             feedbackProfile.TryGet(out healthFilter);
             feedbackProfile.TryGet(out concentrationDistortion);
             feedbackProfile.TryGet(out concentrationDoubleVision);
+            if (!feedbackProfile.TryGet(out smokeVignette)) smokeVignette = feedbackProfile.Add<Vignette>();
+            smokeVignette.color.Override(Color.black);
+            smokeVignette.intensity.Override(0);
+            smokeVignette.smoothness.Override(.9f);
+            healthFilter.postExposure.Override(0);
         }
 
         public void BuildScene()
@@ -80,20 +87,24 @@ namespace Parry
                 DemoArt.Billboard("Dummy sprite", target.transform, DemoArt.Character(true), Vector3.up * .85f);
                 target.AddComponent<PracticeTarget>(); DemoArt.Shadow(target.transform);
             }
-            var enemy = new GameObject("Enemy — melee pursuer");
-            enemy.transform.SetParent(transform);
-            enemy.transform.position = new Vector3(0, 0, 6);
-            var enemyCollider = enemy.AddComponent<CapsuleCollider>();
-            enemyCollider.center = Vector3.up * .75f;
-            enemyCollider.height = 1.5f;
-            enemyCollider.radius = .35f;
-            enemyCollider.isTrigger = true;
-            var enemySprite = DemoArt.Billboard("Enemy sprite", enemy.transform, DemoArt.Character(false), Vector3.up * .85f);
-            enemySprite.color = new Color(1, .35f, .25f);
-            enemy.AddComponent<PracticeTarget>();
-            DemoArt.Shadow(enemy.transform);
-            enemyFighter = enemy.AddComponent<EnemyBrain>();
-            enemyFighter.Initialize(player);
+            for (int i = 0; i < 4; i++)
+            {
+                var enemy = new GameObject("Enemy — melee pursuer " + (i + 1));
+                enemy.transform.SetParent(transform);
+                enemy.transform.position = new Vector3((i % 2 == 0 ? -1 : 1) * (i < 2 ? 2 : 4), 0, i < 2 ? 6 : 3);
+                var enemyCollider = enemy.AddComponent<CapsuleCollider>();
+                enemyCollider.center = Vector3.up * .75f;
+                enemyCollider.height = 1.5f;
+                enemyCollider.radius = .35f;
+                enemyCollider.isTrigger = true;
+                var enemySprite = DemoArt.Billboard("Enemy sprite", enemy.transform, DemoArt.Character(false), Vector3.up * .85f);
+                enemySprite.color = new Color(1, .35f, .25f);
+                enemy.AddComponent<PracticeTarget>();
+                DemoArt.Shadow(enemy.transform);
+                var fighter = enemy.AddComponent<EnemyBrain>();
+                fighter.Initialize(player);
+                if (i == 0) enemyFighter = fighter;
+            }
         }
         void SetupLighting()
         {
@@ -140,6 +151,9 @@ namespace Parry
             healthEffect = Mathf.Lerp(healthEffect, missingHealth, blend);
             concentrationEffect = Mathf.Lerp(concentrationEffect, pressure * pressure, blend);
             healthFilter.saturation.value = -100 * healthEffect;
+            smokeEffect = Mathf.Lerp(smokeEffect, player.IsAlive ? SmokeCloud.Exposure(player.transform.position) : 0, blend);
+            healthFilter.postExposure.value = -1.5f * smokeEffect;
+            smokeVignette.intensity.value = .72f * smokeEffect;
             float time = Time.time;
             float pulse = .85f + Mathf.Sin(time * 5) * .15f;
             concentrationDistortion.intensity.value = concentrationEffect * pulse * -.35f;
@@ -234,7 +248,7 @@ namespace Parry
             GUI.Label(new Rect(22, 19, 335, 18), "WASD / Arrows: move  •  Mouse: aim  •  LMB / J: attack", controlsLabel);
             GUI.Label(new Rect(22, 37, 335, 18), "Hold RMB / K / LB: block  •  Tap before impact: parry", controlsLabel);
             GUI.Label(new Rect(22, 55, 335, 18), "Space: dodge  •  R: revive / heal  •  Scroll: zoom", controlsLabel);
-            GUI.Label(new Rect(22, 73, 335, 18), "1: normal  •  2: prepare lunge  •  Click attack: execute", controlsLabel);
+            GUI.Label(new Rect(22, 73, 335, 18), "1 / 2: style  •  Alt / Option: relax", controlsLabel);
         }
     }
 }

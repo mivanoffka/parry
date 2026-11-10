@@ -113,6 +113,8 @@ namespace Parry
                 progress = weapon != null ? (weapon.RecoveryProgress > 0
                     ? .5f + weapon.RecoveryProgress * .5f : Mathf.Max(0, weapon.SwingProgress) * .5f) : 0;
             }
+            else if (guard.State.Relaxing && motion > .1f) { clip = "RelaxWalk"; progress = gait.Phase; }
+            else if (guard.State.Relaxing) { clip = "Relax"; progress = Time.time / 2.4f; }
             else if (guard.Blocking && motion > .1f) { clip = "GuardWalk"; progress = gait.Phase; }
             else if (guard.Blocking) { clip = "Guard"; progress = Time.time; }
             else if (motion > .1f) { clip = "Walk"; progress = gait.Phase; }
@@ -135,10 +137,23 @@ namespace Parry
             skeleton.Tint(body.color);
             if (!rolling && !guard.Disrupted && weapon != null)
             {
+                Quaternion sampledArm = skeleton.SwordShoulder.localRotation;
                 skeleton.AimSwordHand(weapon.transform.position + skeleton.Root.up * .075f);
+                // The relaxation clip owns the stretched arm; the old world-space grip
+                // could pull it across the torso or reverse it when facing the camera.
+                float restBlend = weapon.RelaxationBlend;
+                skeleton.SwordShoulder.localRotation = Quaternion.Slerp(
+                    skeleton.SwordShoulder.localRotation, sampledArm, restBlend);
+                Vector3 bladeDirection = skeleton.Root.TransformVector(new Vector3(1, -.25f, 0)).normalized;
+                float bladeAngle = Mathf.Atan2(-Vector3.Dot(bladeDirection, camera.transform.right),
+                    Vector3.Dot(bladeDirection, camera.transform.up)) * Mathf.Rad2Deg;
+                weapon.transform.rotation = Quaternion.Slerp(weapon.transform.rotation,
+                    camera.transform.rotation * Quaternion.Euler(0, 0, bladeAngle), restBlend);
                 weapon.transform.position = skeleton.SwordWrist.position - skeleton.Root.up * .075f;
                 if (player != null)
                     weapon.ChargeGlint(weapon.WindupProgress, player.PreparingPowerfulAttack && !guard.Blocking);
+                else if (enemy != null)
+                    weapon.ChargeGlint(weapon.WindupProgress, enemy.PowerfulThreat && !enemy.UnblockableAttack);
             }
         }
 

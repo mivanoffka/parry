@@ -9,6 +9,35 @@ void Check(bool condition, string description)
 }
 void Near(float actual, float expected, string description) => Check(Math.Abs(actual - expected) < .01f, description);
 
+foreach (int endurance in new[] { 100, 500, 1000 })
+{
+    var lungeDefender = new PostureState();
+    lungeDefender.ConfigureEndurance(endurance);
+    lungeDefender.SetBlocking(true, 10);
+    lungeDefender.Block(11, true);
+    Check(lungeDefender.Broken(11) && lungeDefender.Disrupted(11), "Blocking a lunge always breaks balance regardless of endurance");
+    Check(!lungeDefender.Blocking && !lungeDefender.CanAttack(11), "Lunge block disables guard and attacks during the break");
+    Near(lungeDefender.RemainingEndurance, endurance - 28, "Lunge block retains its usual endurance cost");
+    Check(lungeDefender.Broken(12.24f) && !lungeDefender.Broken(12.25f), "Lunge block breaks balance for 1.25 seconds");
+    lungeDefender.Reset();
+    lungeDefender.SetBlocking(true, 10);
+    lungeDefender.Block(11);
+    Check(!lungeDefender.Disrupted(11), "Ordinary block does not force a balance break");
+    lungeDefender.Reset();
+    lungeDefender.SetBlocking(true, 10);
+    lungeDefender.Parry(10.1f, true);
+    Check(!lungeDefender.Disrupted(10.1f), "Parrying a lunge does not force a balance break");
+}
+
+Near(EnemyFlankingRules.TurnToSlot(0, 0, 1, 2), 180, "Two nearby attackers take opposite sides");
+Near(EnemyFlankingRules.TurnToSlot(180, 0, 1, 2), 0, "An attacker already opposite its ally can attack without circling");
+Near(EnemyFlankingRules.TurnToSlot(0, 0, 1, 3), 120, "Three attackers spread to the second sector");
+Near(EnemyFlankingRules.TurnToSlot(0, 0, 2, 3), -120, "The third attacker takes the shorter path to the other side");
+Near(EnemyFlankingRules.TurnToSlot(170, -170, 0, 2), 20, "Circling crosses the heading boundary along the short route");
+Near(EnemyFlankingRules.TurnToSlot(0, 90, 0, 1), 0, "A lone enemy keeps its ordinary approach");
+Near(EnemyFlankingRules.TurnToSlot(90, 90, 0, 2), 0, "The anchor holds its side while its ally flanks");
+Near(EnemyFlankingRules.TurnToSlot(0, 0, 1, 4), 90, "Additional attackers receive narrower sectors");
+
 Near(LocomotionCycle.Rate(8, false), 1.5f, "Player running cadence stays at one and a half cycles per second");
 Near(LocomotionCycle.Rate(100, false), 1.5f, "Knockback or a position jump cannot accelerate the gait beyond its cap");
 Near(LocomotionCycle.Rate(4.2f, false), .84f, "Enemy walking uses a calmer cadence");
@@ -87,6 +116,87 @@ Near(timedDefender.Pressure, 100, "Ending a break preserves load until normal re
 timedDefender.ConfigureEndurance(200);
 timedDefender.Parry(20, true);
 Near(timedDefender.RemainingEndurance, 160, "Powerful parry spends forty actual points with configured endurance");
+
+var swingCost = new PostureState();
+swingCost.SetBlocking(true, 5);
+Check(swingCost.TrySpendForAttack(15, 5), "An ordinary attack spends concentration when committed");
+Near(swingCost.RemainingEndurance, 85, "Ordinary swing costs fifteen actual endurance points");
+Check(!swingCost.Blocking, "Committing an attack lowers guard");
+swingCost.Tick(.1f, 6.9f);
+Near(swingCost.Pressure, 15, "Attack cost restarts the two-second recovery delay even on a miss");
+swingCost.DelayAttacks(.85f, 7);
+Check(!swingCost.TrySpendForAttack(15, 7.4f), "Attack payment respects the player's post-parry delay");
+Near(swingCost.Pressure, 15, "Rejected attack does not spend concentration");
+swingCost.Reset();
+swingCost.AddPressure(85, 10);
+Check(!swingCost.TrySpendForAttack(15, 10), "Ordinary attacks require enough concentration without exhausting the final points");
+Near(swingCost.Pressure, 85, "Rejected exhausting swing cannot break balance");
+swingCost.Reset();
+swingCost.Recoil(20);
+Check(!swingCost.TrySpendForAttack(15, 20.1f), "An attack cannot pay its way through a stagger");
+swingCost.ConfigureEndurance(1000);
+Check(swingCost.TrySpendForAttack(15, 30), "Enemy-sized endurance reserves use the same swing cost");
+Near(swingCost.RemainingEndurance, 985, "Attack cost is points rather than a fraction of maximum endurance");
+Check(!swingCost.TrySpendForAttack(-15, 31), "Invalid attack cost cannot restore concentration");
+
+var parriedPlayer = new PostureState();
+parriedPlayer.Recoil(10);
+parriedPlayer.DelayAttacks(.85f, 10);
+Check(!parriedPlayer.CanAttack(10.4f), "After parry, attacks stay blocked beyond physical recoil");
+Check(!parriedPlayer.Disrupted(10.4f), "The extra attack delay does not extend the movement stagger");
+parriedPlayer.SetBlocking(true, 10.4f);
+Check(parriedPlayer.Blocking && parriedPlayer.CanParry(10.4f), "Player may defend during the extra attack delay");
+Check(parriedPlayer.CanSpendForRoll(20, 10.4f), "Player may dodge during the extra attack delay");
+Check(!parriedPlayer.CanAttack(10.84f) && parriedPlayer.CanAttack(10.86f), "Attack delay expires after 0.85 seconds");
+parriedPlayer.DelayAttacks(.85f, 11);
+parriedPlayer.DelayAttacks(.1f, 11.1f);
+Check(!parriedPlayer.CanAttack(11.5f), "A shorter later delay cannot bypass the existing parry penalty");
+parriedPlayer.Reset();
+Check(parriedPlayer.CanAttack(11.5f), "Respawn clears the parry attack delay");
+
+foreach (float pressure in new[] { 20f, 50f, 80f })
+{
+    var normalRest = new PostureState();
+    var relaxedRest = new PostureState();
+    normalRest.AddPressure(pressure, 0); relaxedRest.AddPressure(pressure, 0);
+    Check(relaxedRest.BeginRelaxation(0), "A balanced fighter can enter relaxation");
+    relaxedRest.Tick(.01f, 1);
+    Near(relaxedRest.Pressure, pressure, "Relaxation cannot bypass the existing two-second combat recovery delay");
+    normalRest.Tick(.01f, 3); relaxedRest.Tick(.01f, 3);
+    Near(pressure - relaxedRest.Pressure, (pressure - normalRest.Pressure) * 2.5f,
+        "Relaxation recovers concentration two and a half times faster in each load zone");
+}
+var stretch = new PostureState();
+stretch.BeginRelaxation(5);
+Near(stretch.ExitRelaxationForAttack(), 2, "The first attack after relaxation doubles its windup");
+Check(!stretch.Relaxing, "Starting an attack leaves relaxation");
+Near(stretch.ExitRelaxationForAttack(), 1, "The exit penalty applies only to the first action");
+stretch.BeginRelaxation(6);
+stretch.LeaveRelaxation();
+Near(stretch.ExitRelaxationForAttack(), 2, "Manual toggle cannot erase the slower attack transition");
+stretch.BeginRelaxation(7);
+stretch.SetBlocking(true, 7);
+Check(!stretch.Relaxing && stretch.GuardTransition && !stretch.Blocking && !stretch.CanParry(7),
+    "Leaving relaxation to defend starts an exposed weapon-raise transition");
+stretch.SetBlocking(true, 7.19f);
+Check(!stretch.Blocking, "Defense is not available before its slower draw finishes");
+stretch.SetBlocking(true, 7.21f);
+Check(stretch.Blocking && stretch.CanParry(7.21f) && !stretch.GuardTransition,
+    "Defense and its fresh parry window activate after the weapon is ready");
+Near(stretch.ExitRelaxationForAttack(), 1, "Completing guard draw consumes the relaxation exit penalty");
+stretch.SetBlocking(false, 8);
+stretch.BeginRelaxation(8);
+stretch.SetBlocking(true, 8);
+stretch.SetBlocking(false, 8.05f);
+Near(stretch.ExitRelaxationForAttack(), 2, "Cancelling the guard draw cannot bypass the slower next attack");
+stretch.BeginRelaxation(9);
+Check(stretch.TrySpendForRoll(20, 9), "A roll can leave relaxation");
+Check(!stretch.Relaxing, "Rolling cancels accelerated recovery");
+stretch.BeginRelaxation(10);
+stretch.Recoil(10);
+Check(!stretch.Relaxing && !stretch.BeginRelaxation(10.1f), "Stagger cancels relaxation and prevents reentry");
+stretch.Reset();
+Check(!stretch.Relaxing && !stretch.GuardTransition, "Respawn clears relaxation and pending transitions");
 
 var defender = new PostureState();
 defender.SetBlocking(true, 1);
@@ -189,70 +299,107 @@ idle.Recoil(201);
 idle.Reset();
 Near(idle.Pressure, 0, "Revive clears concentration pressure");
 Check(!idle.Disrupted(201) && !idle.Blocking, "Revive clears stun and guard state");
-var tactics = new EnemyTactics();
-Check(tactics.Aggressive && !tactics.Retreating, "Fresh enemy presses the attack");
-tactics.Update(56, 0);
-Check(!tactics.Aggressive && !tactics.Retreating, "Moderate load produces cautious fighting");
-tactics.Update(70, 1);
-Check(tactics.Retreating && !tactics.Aggressive, "High load starts recovery before exhaustion");
-tactics.Update(30, 1.4f);
-Check(tactics.Retreating, "Rapid recovery still honors a short retreat commitment");
-tactics.Update(36, 2);
-Check(tactics.Retreating, "Recovery waits for a useful concentration reserve");
-tactics.Update(35, 2.1f);
-Check(!tactics.Retreating && tactics.Aggressive, "Recovered enemy returns without requiring full concentration");
-tactics.Update(96, 2.2f, threatened: true);
-Check(tactics.Retreating && tactics.UrgentRetreat, "Immediate danger overrides reengagement commitment");
-tactics.Update(85, 20);
-Check(tactics.Retreating, "A timer never forces an exhausted enemy back into combat");
-Check(!tactics.CanCounterattack(85, 100, true), "Even a vulnerable target is unsafe at critical load");
-tactics.Reset();
-tactics.Reset();
-tactics.Update(40, 0, endurance: 200);
-tactics.Update(69, .1f, endurance: 200);
-Check(tactics.Retreating, "Rapidly rising load triggers an earlier retreat");
-tactics.Reset();
-tactics.Update(69, 0, endurance: 200);
-Check(!tactics.Retreating, "Stable load permits caution when the same rising load would prompt retreat");
-tactics.Reset();
-tactics.Update(60, 0, endurance: 50);
-Check(tactics.Retreating, "Actual endurance capacity changes the safety reserve");
-tactics.Reset();
-tactics.Update(60, 0, endurance: 200);
-Check(!tactics.Retreating, "A larger endurance reserve supports continuing the fight");
-tactics.Reset();
-tactics.Update(68, 0, endurance: 50, threatened: true);
-Check(tactics.UrgentRetreat && tactics.Retreating, "An incoming block that could break concentration is urgent");
-tactics.Reset();
-tactics.Update(60, 0, endurance: 100);
-Check(tactics.Retreating, "Insufficient reserve for a parried attack favors retreat");
-Check(!tactics.CanCounterattack(52, 100, false), "Mere proximity never cancels recovery");
-Check(!tactics.CanCounterattack(52, 100, true), "A counterattack still requires enough reserve");
-tactics.Update(40, 1);
-Check(tactics.Retreating && tactics.CanCounterattack(40, 100, true), "A safe opening can justify a counterattack during recovery");
-tactics.Reset();
-tactics.Update(72, 0, endurance: 300, opening: true);
-Check(!tactics.Retreating, "A vulnerable opponent and sufficient reserve favor exploiting the opening");
-tactics.Reset();
-Check(!tactics.Retreating && !tactics.UrgentRetreat && tactics.Aggressive, "Respawn clears recovery decisions and load history");
+Near(EnemyTactics.RetreatChance(0), .02f, "Full concentration has a low rest probability");
+Near(EnemyTactics.RetreatChance(50), .5f, "Half concentration has a fifty percent rest probability");
+Near(EnemyTactics.RetreatChance(90), .95312f, "Ten percent remaining concentration gives about ninety-five percent retreat chance");
+Near(EnemyTactics.RetreatChance(100), .98f, "An empty reserve gives ninety-eight percent retreat chance");
+Near(EnemyTactics.RetreatChance(-10), .02f, "Retreat probability clamps low invalid pressure");
+Near(EnemyTactics.RetreatChance(120), .98f, "Retreat probability clamps high invalid pressure");
+for (int pressure = 0; pressure < 100; pressure += 10)
+    Check(EnemyTactics.RetreatChance(pressure) < EnemyTactics.RetreatChance(pressure + 10), "Less concentration increases rest probability");
+Check(EnemyTactics.RetreatChance(95, 95) < EnemyTactics.RetreatChance(95, 0),
+    "An exhausted enemy is less likely to retreat when the player is also exhausted");
+Near(EnemyTactics.RetreatChance(100, 100), .245f, "Both empty reserves still leave a nonzero retreat choice");
+for (int opponentLoad = 0; opponentLoad < 100; opponentLoad += 10)
+    Check(EnemyTactics.RetreatChance(95, opponentLoad) > EnemyTactics.RetreatChance(95, opponentLoad + 10),
+        "As player concentration falls, the enemy's retreat chance decreases smoothly");
+var facingFreshPlayer = new EnemyTactics(() => .5f);
+var facingTiredPlayer = new EnemyTactics(() => .5f);
+facingFreshPlayer.Update(95, 0, opponentPressure: 0);
+facingTiredPlayer.Update(95, 0, opponentPressure: 95);
+Check(facingFreshPlayer.Retreating && !facingTiredPlayer.Retreating,
+    "The same random decision retreats from a fresh player but attacks a depleted player");
+Check(facingTiredPlayer.Aggressive && facingTiredPlayer.ExploitingWeakness,
+    "Declining rest against an exhausted player retains aggressive behavior despite low own concentration");
+var bothEmpty = new EnemyTactics(() => .1f);
+bothEmpty.Update(100, 0, opponentPressure: 100);
+Check(bothEmpty.Retreating, "Very low player concentration reduces probability without forcing continuous attacks");
+bothEmpty.Update(100, .1f, opponentPressure: 100, opponentDisrupted: true);
+Check(!bothEmpty.Retreating && bothEmpty.Aggressive, "An off-balance player still takes priority over a chosen retreat");
 
-var opportunist = new EnemyTactics();
+int decisions = 0;
+var tactics = new EnemyTactics(() => ++decisions == 1 ? .999f : 0);
+tactics.Update(99, 0);
+Check(!tactics.Retreating && decisions == 1, "An unlucky rest decision can keep an exhausted enemy fighting");
+tactics.Update(99, .2f);
+tactics.Update(99, .99f);
+Check(decisions == 1 && !tactics.Retreating, "Repeated frames cannot reroll before the decision interval expires");
+tactics.Update(99, 1);
+Check(decisions == 2 && tactics.Retreating && tactics.UrgentRetreat, "The next scheduled decision can choose an urgent retreat");
+tactics.Update(30, 1.4f);
+Check(tactics.Retreating, "A chosen retreat honors its minimum duration");
+tactics.Update(36, 2);
+Check(tactics.Retreating, "A retreat continues until enough concentration has recovered");
+tactics.Update(35, 2.1f);
+Check(!tactics.Retreating && tactics.Aggressive && !tactics.UrgentRetreat, "A rested enemy reengages without a stale urgent-retreat flag");
+tactics.Update(90, 2.8f);
+Check(decisions == 2, "Reengagement grants a full interval before another rest question");
+tactics.Update(90, 3.1f);
+Check(decisions == 3 && tactics.Retreating, "Rest questions resume after reengagement");
+var cautiousChoice = new EnemyTactics(() => .1f);
+var fightingChoice = new EnemyTactics(() => .9f);
+cautiousChoice.Update(50, 0);
+fightingChoice.Update(50, 0);
+Check(cautiousChoice.Retreating && !fightingChoice.Retreating, "The same concentration can produce different random decisions");
+int slowDecisions = 0;
+var slowThinker = new EnemyTactics(() => { slowDecisions++; return .999f; });
+slowThinker.Update(80, 0, decisionInterval: 2);
+slowThinker.Update(80, 1.5f, decisionInterval: 2);
+Check(slowDecisions == 1, "Configured rest-decision interval is respected");
+slowThinker.Update(80, 10, decisionInterval: 2);
+Check(slowDecisions == 2, "A long frame samples once rather than replaying missed rest questions");
+var opportunist = new EnemyTactics(() => 0);
 opportunist.Update(96, 0, threatened: true);
-Check(opportunist.Retreating, "An exhausted enemy normally retreats");
-opportunist.Update(96, .1f, threatened: true, opponentPressure: 70);
-Check(opportunist.ExploitingWeakness && opportunist.Aggressive && !opportunist.Retreating && !opportunist.UrgentRetreat,
-    "A visible low-reserve opponent overrides critical own pressure and retreat commitment");
-opportunist.Reengage(96, .2f);
-Check(opportunist.Aggressive, "Reengagement cannot erase aggression against a weak opponent");
-opportunist.Update(96, .3f, threatened: true, opponentPressure: 69);
-Check(!opportunist.ExploitingWeakness && opportunist.Retreating, "Normal survival tactics resume once the opponent recovers");
-opportunist.Update(99, .4f, endurance: 50, opponentDisrupted: true);
-Check(opportunist.Aggressive && !opportunist.Retreating, "An off-balance opponent is attacked despite almost exhausted own reserve");
+Check(opportunist.Retreating, "An exhausted enemy can choose to retreat");
+opportunist.Update(96, .1f, opponentPressure: 70);
+Check(opportunist.Retreating && !opportunist.ExploitingWeakness,
+    "A low-reserve opponent does not erase an already chosen random retreat");
+opportunist.Update(99, .2f, opponentDisrupted: true);
+Check(opportunist.Aggressive && !opportunist.Retreating, "An off-balance opponent is still attacked despite own exhaustion");
+opportunist.Update(96, 1.1f);
+Check(opportunist.Retreating, "Rest decisions resume once the opponent is no longer vulnerable");
 opportunist.Reset();
-Check(!opportunist.ExploitingWeakness, "Respawn clears the opportunity override");
+Check(!opportunist.Retreating && opportunist.Aggressive && !opportunist.ExploitingWeakness, "Respawn clears rest decisions and aggression overrides");
+opportunist.Update(96, 2);
+Check(opportunist.Retreating, "Reset permits a fresh initial rest decision");
+
+int advantageDecisions = 0;
+var superiorEnemy = new EnemyTactics(() => { advantageDecisions++; return 0; });
+superiorEnemy.Update(80, 0);
+Check(superiorEnemy.Retreating, "Enemy may be resting before a concentration advantage appears");
+superiorEnemy.Update(20, .1f, opponentPressure: 60);
+Check(superiorEnemy.FullOffense && superiorEnemy.Aggressive && superiorEnemy.ExploitingWeakness
+    && !superiorEnemy.Retreating && !superiorEnemy.UrgentRetreat,
+    "A major reserve advantage immediately switches an enemy from rest to full offense");
+Check(advantageDecisions == 1, "Full offense does not roll another random rest decision");
+superiorEnemy.Update(35, .2f, opponentPressure: 60);
+Check(superiorEnemy.FullOffense, "The offensive mode persists while the advantage remains above twenty points");
+superiorEnemy.Update(42, .3f, opponentPressure: 60);
+Check(!superiorEnemy.FullOffense, "Maximum offense ends when the advantage drops below twenty points");
+superiorEnemy.Update(35, .4f, opponentPressure: 60);
+Check(!superiorEnemy.FullOffense, "A small advantage rebound cannot immediately reenable maximum offense");
+superiorEnemy.Update(30, .5f, opponentPressure: 60);
+Check(superiorEnemy.FullOffense, "A new thirty-point advantage reactivates maximum offense");
+superiorEnemy.Reset();
+Check(!superiorEnemy.FullOffense, "Respawn clears the maximum-offense mode");
+var equalReserves = new EnemyTactics(() => .999f);
+equalReserves.Update(95, 0, opponentPressure: 95);
+Check(!equalReserves.FullOffense, "Two equally exhausted fighters retain probabilistic rest behavior");
+equalReserves.Update(60, .1f, opponentPressure: 95);
+Check(equalReserves.FullOffense && equalReserves.Aggressive, "Relative reserve advantage can justify maximum pressure even below half reserve");
 
 var parriedEnemy = new PostureState();
-var retreatAfterParry = new EnemyTactics();
+var retreatAfterParry = new EnemyTactics(() => .999f);
 parriedEnemy.AddPressure(45, 10);
 parriedEnemy.Recoil(10);
 retreatAfterParry.Update(parriedEnemy.Pressure, 10);
@@ -275,7 +422,7 @@ retreatAfterParry.Update(parriedEnemy.Pressure, 12.5f);
 Check(!retreatAfterParry.Retreating && retreatAfterParry.Aggressive, "Enemy attacks again after a complete recovery phase");
 
 var woundedEnemy = new PostureState();
-var retreatAfterHits = new EnemyTactics();
+var retreatAfterHits = new EnemyTactics(() => .999f);
 woundedEnemy.AddPressure(22, 20);
 retreatAfterHits.Update(woundedEnemy.Pressure, 20);
 Check(!retreatAfterHits.Retreating, "One normal hit does not cause constant fleeing");

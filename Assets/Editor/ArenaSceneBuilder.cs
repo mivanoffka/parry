@@ -5,6 +5,8 @@ using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
+using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.LowLevel;
 
 namespace Parry.Editor
 {
@@ -81,6 +83,15 @@ namespace Parry.Editor
                     if (corpses.Length != 1 || corpses[0].transform.position != deathPosition
                         || corpses[0].GetComponentInChildren<Collider>() != null)
                         throw new InvalidOperationException("Enemy death did not leave a non-blocking body at the impact position.");
+                    typeof(EnemyCorpse).GetField("createdAt", System.Reflection.BindingFlags.Instance
+                        | System.Reflection.BindingFlags.NonPublic).SetValue(corpses[0], Time.time - .35f);
+                    typeof(EnemyCorpse).GetMethod("LateUpdate", System.Reflection.BindingFlags.Instance
+                        | System.Reflection.BindingFlags.NonPublic).Invoke(corpses[0], null);
+                    Vector3 restingPosition = corpses[0].transform.position;
+                    Vector3 corpseTravel = restingPosition - deathPosition;
+                    if (corpseTravel.z <= 0 || corpseTravel.magnitude > .651f
+                        || Mathf.Abs(corpseTravel.x) > .001f || Mathf.Abs(corpseTravel.y) > .001f)
+                        throw new InvalidOperationException("The body did not slide a short distance along the lethal strike.");
                     enemy.Health.TakeHit(1, Vector3.forward);
                     if (arena.GetComponentsInChildren<EnemyCorpse>().Length != 1)
                         throw new InvalidOperationException("Repeated damage to a defeated enemy duplicated the body.");
@@ -137,9 +148,9 @@ namespace Parry.Editor
                         | System.Reflection.BindingFlags.NonPublic).SetValue(enemy.Health, Time.time);
                     typeof(PracticeTarget).GetMethod("Update", System.Reflection.BindingFlags.Instance
                         | System.Reflection.BindingFlags.NonPublic).Invoke(enemy.Health, null);
-                    if (!enemy.Health.IsAlive || corpses[0].transform.position != deathPosition
+                    if (enemy.Health.IsAlive || corpses[0].transform.position != restingPosition
                         || !corpses[0].GetComponentInChildren<SpriteRenderer>().enabled)
-                        throw new InvalidOperationException("The body did not remain after enemy respawn.");
+                        throw new InvalidOperationException("A defeated enemy respawned automatically or lost its body.");
                     Debug.Log("PARRY ENEMY CORPSE CHECK PASSED");
                     Debug.Log("PARRY BAKED SCENE PLAY MODE CHECK PASSED");
                     EditorApplication.Exit(0);
@@ -225,6 +236,93 @@ namespace Parry.Editor
                     Debug.LogException(error);
                     EditorApplication.Exit(1);
                 }
+            };
+            EditorApplication.EnterPlaymode();
+        }
+
+        public static void VerifyRelaxation()
+        {
+            // This feature check does not depend on the original demo's dummy/obstacle counts.
+            EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+            UnityEngine.Object.FindAnyObjectByType<EnemyBrain>().enabled = false;
+            EditorApplication.playModeStateChanged += state =>
+            {
+                if (state != PlayModeStateChange.EnteredPlayMode) return;
+                EditorApplication.CallbackFunction check = null;
+                check = () =>
+                {
+                    EditorApplication.update -= check;
+                    try
+                    {
+                        var arena = UnityEngine.Object.FindAnyObjectByType<ArenaDemo>();
+                        var player = arena.GetComponentInChildren<PlayerMotor>();
+                        var enemy = arena.GetComponentInChildren<EnemyBrain>();
+                        player.enabled = enemy.enabled = false;
+                        player.Respawn();
+                        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                        var update = typeof(PlayerMotor).GetMethod("Update", flags);
+                        Application.runInBackground = true;
+                        InputSystem.settings.backgroundBehavior = InputSettings.BackgroundBehavior.IgnoreFocus;
+                        InputSystem.settings.updateMode = InputSettings.UpdateMode.ProcessEventsInDynamicUpdate;
+                        InputSystem.settings.editorInputBehaviorInPlayMode = InputSettings.EditorInputBehaviorInPlayMode.AllDeviceInputAlwaysGoesToGameView;
+                        var updateInput = typeof(InputSystem).GetMethod("Update", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic,
+                            null, new[] { typeof(InputUpdateType) }, null);
+                        var keyboard = InputSystem.AddDevice<Keyboard>();
+                        InputSystem.EnableDevice(keyboard);
+                        void Keys(params Key[] keys)
+                        {
+                            InputSystem.QueueStateEvent(keyboard, new KeyboardState(keys));
+                            // An unfocused batch editor otherwise defaults to Editor input buffers.
+                            updateInput.Invoke(null, new object[] { InputUpdateType.Dynamic });
+                        }
+                        Keys();
+                        Keys(Key.LeftAlt); update.Invoke(player, null);
+                        if (!player.Guard.State.Relaxing || player.Guard.Blocking)
+                            throw new InvalidOperationException($"Alt did not enter unguarded relaxation (pressed={keyboard.leftAltKey.wasPressedThisFrame}, current={Keyboard.current == keyboard}, alive={player.IsAlive}, block={player.Guard.Blocking}, transition={player.Guard.State.GuardTransition}).");
+                        Keys(Key.D);
+                        for (int frame = 0; frame < 12; frame++) update.Invoke(player, null);
+                        float speed = (float)typeof(PlayerMotor).GetField("speed", flags).GetValue(player);
+                        if (((Vector3)typeof(PlayerMotor).GetField("velocity", flags).GetValue(player)).magnitude > speed * .31f)
+                            throw new InvalidOperationException("Relaxation did not slow player movement.");
+                        Keys(Key.J); update.Invoke(player, null);
+                        Keys(); update.Invoke(player, null);
+                        float windup = (float)typeof(PlayerMotor).GetField("windup", flags).GetValue(player);
+                        float actualWindup = (float)typeof(PlayerMotor).GetProperty("CurrentWindup", flags).GetValue(player);
+                        if (player.Guard.State.Relaxing || !player.Attacking || Mathf.Abs(actualWindup - windup * 2) > .001f)
+                            throw new InvalidOperationException("An attack did not leave relaxation with double windup.");
+                        player.InterruptAttack();
+                        Keys(Key.RightAlt); update.Invoke(player, null);
+                        if (!player.Guard.State.Relaxing)
+                            throw new InvalidOperationException("Right Alt / Option did not enter relaxation.");
+                        Keys(Key.K); update.Invoke(player, null);
+                        if (player.Guard.State.Relaxing || player.Guard.Blocking || !player.Guard.State.GuardTransition)
+                            throw new InvalidOperationException("Guard input bypassed the relaxation weapon-raise delay.");
+                        Keys();
+                        enemy.Guard.ResetCombat();
+                        ((EnemyTactics)typeof(EnemyBrain).GetField("tactics", flags).GetValue(enemy)).Reset();
+                        typeof(EnemyBrain).GetField("nextAttackAt", flags).SetValue(enemy, 0f);
+                        typeof(EnemyBrain).GetMethod("BeginRetreat", flags).Invoke(enemy, null);
+                        if (!enemy.Guard.State.Relaxing || enemy.Guard.Blocking)
+                            throw new InvalidOperationException("Enemy retreat did not enter relaxation.");
+                        typeof(EnemyBrain).GetMethod("BeginWindup", flags).Invoke(enemy, new object[] { true });
+                        float enemyWindup = (float)typeof(EnemyBrain).GetField("windup", flags).GetValue(enemy);
+                        float actualEnemyWindup = (float)typeof(EnemyBrain).GetProperty("CurrentWindup", flags).GetValue(enemy);
+                        if (enemy.Guard.State.Relaxing || Mathf.Abs(actualEnemyWindup - enemyWindup * 2) > .001f)
+                            throw new InvalidOperationException("Enemy attack skipped its slower transition from relaxation.");
+                        var weapon = player.GetComponentInChildren<WeaponVisual>();
+                        typeof(WeaponVisual).GetField("relaxationBlend", flags).SetValue(weapon, 0f);
+                        weapon.Pose(Vector3.forward, true, false, false);
+                        Vector3 ready = weapon.transform.position;
+                        typeof(WeaponVisual).GetField("relaxationBlend", flags).SetValue(weapon, 1f);
+                        weapon.Pose(Vector3.forward, true, false, false, relaxing: true);
+                        if (Vector3.Distance(ready, weapon.transform.position) < .3f)
+                            throw new InvalidOperationException("Relaxation did not stretch the weapon arm to the side.");
+                        Debug.Log("PARRY RELAXATION INPUT, MOVEMENT, ATTACK/GUARD TRANSITIONS, ENEMY REST AND WEAPON POSE CHECK PASSED");
+                        EditorApplication.Exit(0);
+                    }
+                    catch (Exception error) { Debug.LogException(error); EditorApplication.Exit(1); }
+                };
+                EditorApplication.update += check;
             };
             EditorApplication.EnterPlaymode();
         }
@@ -333,7 +431,7 @@ namespace Parry.Editor
                     player.Push(Vector3.zero, 0);
                     enemy.Health.Push(Vector3.zero, 0);
                     if (enemy.Guard.Defend(player.Guard, Vector3.forward, false, true) != DefenseResult.Block
-                        || enemy.Health.Health != 2 || !player.Guard.Disrupted
+                        || enemy.Health.Health != 2 || !enemy.Guard.Broken || !player.Guard.Disrupted
                         || ((Vector3)typeof(PlayerMotor).GetField("knockback", flags).GetValue(player)).z >= 0
                         || ((Vector3)typeof(PracticeTarget).GetField("knockback", flags).GetValue(enemy.Health)).z <= 0)
                         throw new InvalidOperationException("Powerful lunge block did not protect health and push both fighters apart.");
@@ -788,8 +886,8 @@ namespace Parry.Editor
         static void Validate(ArenaDemo arena)
         {
             if (arena.GetComponentsInChildren<PlayerMotor>().Length != 1
-                || arena.GetComponentsInChildren<EnemyBrain>().Length != 1
-                || arena.GetComponentsInChildren<PracticeTarget>().Length != 6
+                || arena.GetComponentsInChildren<EnemyBrain>().Length != 4
+                || arena.GetComponentsInChildren<PracticeTarget>().Length != 9
                 || arena.GetComponentsInChildren<BoxCollider>().Length != 7)
                 throw new InvalidOperationException("Unexpected baked arena object counts.");
             foreach (var renderer in arena.GetComponentsInChildren<SpriteRenderer>())

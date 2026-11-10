@@ -42,7 +42,8 @@ namespace Parry
                 return enemy != null ? enemy.AttackFacing : Facing;
             }
         }
-        bool Powerful => GetComponent<PlayerMotor>() is PlayerMotor player && player.UnblockableThreat;
+        bool Powerful => GetComponent<PlayerMotor>() is PlayerMotor player ? player.UnblockableThreat
+            : GetComponent<EnemyBrain>() is EnemyBrain enemy && enemy.PowerfulThreat;
         readonly Collider[] nearbyDefenders = new Collider[64];
         public void SetFacing(Vector3 facing) => Facing = facing;
         public void Tick(bool wantsBlock, Vector3 facing)
@@ -83,7 +84,7 @@ namespace Parry
             State.Recoil(Time.time); attacker.State.Recoil(Time.time);
             float push = powerful || ownPowerful ? 12 : parry ? 7 : 5;
             Push(incomingDirection, push); attacker.Push(-incomingDirection, push);
-            InterruptAttack(); attacker.InterruptAttack();
+            InterruptAttack(parry); attacker.InterruptAttack(parry);
             Signal(parry ? "PARRY CLASH!" : "BLOCK CLASH", parry);
             attacker.Signal(parry ? "PARRY CLASH!" : "BLOCK CLASH", parry);
             CombatAudio.Play(parry ? CombatSound.Parry : CombatSound.Block, transform.position);
@@ -91,10 +92,14 @@ namespace Parry
                 incomingDirection, parry);
             return true;
         }
-        void InterruptAttack()
+        void InterruptAttack(bool parried)
         {
             var player = GetComponent<PlayerMotor>();
-            if (player != null) player.InterruptAttack();
+            if (player != null)
+            {
+                if (parried) player.OnAttackParried();
+                else player.InterruptAttack();
+            }
             var enemy = GetComponent<EnemyBrain>();
             if (enemy != null) enemy.InterruptAttack();
         }
@@ -112,6 +117,8 @@ namespace Parry
                 {
                     attacker.State.AddPressure(45, Time.time);
                     attacker.State.Recoil(Time.time);
+                    var attackingPlayer = attacker.GetComponent<PlayerMotor>();
+                    if (attackingPlayer != null) attackingPlayer.OnAttackParried();
                     attacker.Signal(attacker.Broken ? "GUARD BROKEN" : "DEFLECTED", false);
                 }
                 Signal("PARRY!", true);
@@ -119,7 +126,7 @@ namespace Parry
                 sparks.Burst(transform.position + Facing * .65f + Vector3.up * .85f, incomingDirection);
                 return DefenseResult.Parry;
             }
-            State.AddPressure(28, Time.time);
+            State.Block(Time.time, powerful);
             if (powerful)
             {
                 PushApart(attacker, incomingDirection);
@@ -143,7 +150,7 @@ namespace Parry
             var player = GetComponent<PlayerMotor>();
             if (player != null) player.Push(direction, speed);
         }
-        public void OnHit() { State.AddPressure(22, Time.time); }
+        public void OnHit() { State.CancelRelaxation(); State.AddPressure(22, Time.time); }
         public void ResetCombat()
         {
             State.Reset(); feedbackUntil = 0; wasBroken = false;
@@ -183,8 +190,9 @@ namespace Parry
             var player = GetComponent<PlayerMotor>();
             var target = GetComponent<PracticeTarget>();
             bool alive = player != null ? player.IsAlive : target != null && target.IsAlive;
-            background.enabled = alive;
-            bar.enabled = alive && Pressure > .001f;
+            bool markersVisible = alive && SmokeCloud.Exposure(transform.position) <= .01f;
+            background.enabled = markersVisible;
+            bar.enabled = markersVisible && Pressure > .001f;
             if (alive)
             {
                 Camera view = Camera.main;
