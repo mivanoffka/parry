@@ -45,6 +45,7 @@ namespace Parry
         public CombatHitbox Hitbox { get; private set; }
         public Vector3 Facing { get; private set; } = Vector3.back;
         public bool Rolling => rollRemaining > 0;
+        public float RollProgress => 1 - Mathf.Clamp01(rollRemaining / Mathf.Max(.001f, rollDuration));
         public bool Attacking => attackRemaining > 0;
         float attackStartedAt;
         public AttackPhase ClashPhase => PreparingPowerfulAttack ? AttackPhase.Windup : !Attacking ? AttackPhase.None
@@ -102,6 +103,7 @@ namespace Parry
             Hitbox = gameObject.AddComponent<CombatHitbox>();
             view = Camera.main;
             visual = GetComponentInChildren<SpriteRenderer>();
+            CharacterPresentation.Install(gameObject, visual, false);
             slash = DemoArt.Line("Sword arc", transform, new Color(1, .85f, .5f), .1f);
             DrawSlash(0, Facing);
             slash.startColor = slash.endColor = new Color(1, .87f, .6f, .35f);

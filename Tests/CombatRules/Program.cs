@@ -9,6 +9,21 @@ void Check(bool condition, string description)
 }
 void Near(float actual, float expected, string description) => Check(Math.Abs(actual - expected) < .01f, description);
 
+Near(LocomotionCycle.Rate(8, false), 1.5f, "Player running cadence stays at one and a half cycles per second");
+Near(LocomotionCycle.Rate(100, false), 1.5f, "Knockback or a position jump cannot accelerate the gait beyond its cap");
+Near(LocomotionCycle.Rate(4.2f, false), .84f, "Enemy walking uses a calmer cadence");
+Check(LocomotionCycle.Rate(8, true) < LocomotionCycle.Rate(8, false), "Guarded movement uses slower steps");
+var slowGait = new LocomotionCycle();
+var fastGait = new LocomotionCycle();
+slowGait.Advance(8, .5f, false);
+for (int step = 0; step < 30; step++) fastGait.Advance(8, 1f / 60, false);
+Near(slowGait.Phase, .75f, "Half a second of running advances less than a full cycle");
+Near(fastGait.Phase, slowGait.Phase, "Gait playback is independent of frame rate");
+slowGait.Advance(0, 1, false);
+Near(slowGait.Phase, .75f, "Standing still does not advance footsteps");
+slowGait.Advance(8, -1, false);
+Near(slowGait.Phase, .75f, "Negative frame time cannot advance footsteps");
+
 foreach (AttackPhase first in Enum.GetValues<AttackPhase>())
 foreach (AttackPhase second in Enum.GetValues<AttackPhase>())
 {
@@ -24,6 +39,54 @@ foreach (AttackPhase second in Enum.GetValues<AttackPhase>())
 Check(AttackClashRules.Phase(.2f, .21f, .09f, .12f) == AttackPhase.Windup, "Damage-free anticipation remains windup");
 Check(AttackClashRules.Phase(.21f, .21f, .09f, .12f) == AttackPhase.Active, "A strike is active at the windup boundary");
 Check(AttackClashRules.Phase(.31f, .21f, .09f, .12f) == AttackPhase.Recovery, "Recovery cannot parry by attacking");
+
+var blockPressure = new EnemyTactics();
+blockPressure.RecordBlock(10, 1.2f);
+Near(blockPressure.AttackBlockedUntil, 11.2f, "Block reserves a longer window for the player's next strike");
+blockPressure.Update(0, 10.2f, opponentPressure: 100, opponentDisrupted: true);
+Near(blockPressure.AttackBlockedUntil, 11.2f, "Aggression and opponent weakness cannot bypass block delay");
+blockPressure.RecordBlock(10.5f, 1.2f);
+Near(blockPressure.AttackBlockedUntil, 11.7f, "Each block refreshes the player's pressure window");
+blockPressure.RecordBlock(10.6f, 0);
+Near(blockPressure.AttackBlockedUntil, 11.7f, "A shorter delay cannot erase existing block pressure");
+blockPressure.RecordParry(10.7f, .7f);
+Near(blockPressure.AttackBlockedUntil, 11.4f, "Parrying replaces the block delay with a shorter but nonzero delay");
+blockPressure.Update(0, 10.8f, opponentPressure: 100, opponentDisrupted: true);
+Near(blockPressure.AttackBlockedUntil, 11.4f, "Opponent weakness cannot bypass the parry delay");
+blockPressure.RecordParry(11, .7f);
+Near(blockPressure.AttackBlockedUntil, 11.7f, "Each parry restarts its counterattack delay");
+blockPressure.RecordBlock(11.1f, 1.2f);
+Near(blockPressure.AttackBlockedUntil, 12.3f, "Blocking after a parry restores the longer delay");
+blockPressure.Reset();
+Near(blockPressure.AttackBlockedUntil, 0, "Respawn clears the counterattack delay");
+
+var timedDefender = new PostureState();
+timedDefender.SetBlocking(true, 10);
+timedDefender.Parry(10.1f);
+Near(timedDefender.Pressure, 14, "Successful parry costs half an ordinary block");
+Check(!timedDefender.CanParry(10.11f), "Paid parry still consumes its timing window");
+timedDefender.AddPressure(80, 10.2f);
+timedDefender.Parry(10.3f);
+Near(timedDefender.Pressure, 100, "Successful parry can fill the concentration gauge");
+Check(!timedDefender.Disrupted(10.3f) && timedDefender.Blocking, "Parry exhaustion preserves balance and guard");
+timedDefender.Tick(.1f, 10.4f);
+Near(timedDefender.Pressure, 100, "Full parry gauge cannot receive the post-break reset");
+timedDefender.SetBlocking(false, 10.5f);
+timedDefender.SetBlocking(true, 10.6f);
+Check(timedDefender.CanParry(10.61f), "Full concentration gauge still allows another timed parry");
+timedDefender.Parry(10.61f, true);
+Near(timedDefender.Pressure, 100, "Powerful parries at full load remain capped");
+Check(!timedDefender.Disrupted(10.61f), "Powerful parry cannot break balance at full load");
+timedDefender.Tick(.1f, 12.7f);
+Near(timedDefender.Pressure, 88.8f, "Full parry load recovers normally after combat delay");
+timedDefender.Parry(12.8f);
+timedDefender.AddPressure(28, 12.9f);
+Check(timedDefender.Broken(12.9f), "An ordinary block after parry exhaustion still breaks balance");
+timedDefender.Tick(.1f, 14.2f);
+Near(timedDefender.Pressure, 100, "Ending a break preserves load until normal recovery resumes");
+timedDefender.ConfigureEndurance(200);
+timedDefender.Parry(20, true);
+Near(timedDefender.RemainingEndurance, 160, "Powerful parry spends forty actual points with configured endurance");
 
 var defender = new PostureState();
 defender.SetBlocking(true, 1);
@@ -83,7 +146,18 @@ attacker.Tick(.5f, 3.5f);
 Near(attacker.Pressure, 100, "Broken pressure stays visible for the full stun");
 Check(!attacker.Broken(4), "Break expires after 1.25 seconds");
 attacker.Tick(.01f, 4);
-Near(attacker.Pressure, 35, "Break recovery restores partial concentration");
+Near(attacker.Pressure, 100, "Regaining balance does not instantly restore concentration");
+attacker.Tick(.1f, 4.8f);
+Near(attacker.Pressure, 92.8f, "Post-break concentration decreases at the normal recovery rate");
+attacker.Tick(.1f, 4.9f);
+Near(attacker.Pressure, 85.6f, "Post-break recovery continues smoothly over successive frames");
+attacker.AddPressure(5, 5);
+Near(attacker.Pressure, 90.6f, "New pressure after a break cannot trigger a hidden load reset");
+var exhaustedAgain = new PostureState();
+exhaustedAgain.AddPressure(100, 10);
+exhaustedAgain.AddPressure(1, 11.3f);
+Near(exhaustedAgain.Pressure, 100, "Pressure before the first recovery tick cannot reset exhaustion");
+Check(exhaustedAgain.Broken(11.3f), "A new hit at full exhaustion can break balance again");
 
 var blocker = new PostureState();
 blocker.SetBlocking(true, 10);
@@ -92,10 +166,10 @@ Check(blocker.Broken(10.4f), "Four blocked hits break defense");
 Check(!blocker.Blocking, "Breaking defense immediately lowers the guard");
 blocker.AddPressure(20, 10.5f);
 Check(!blocker.Broken(11.6f), "Hits during a break cannot extend the stun forever");
-// A hit arriving before the owner's next Tick after expiry must not cause a phantom re-break.
+// Expiring the stagger alone does not replenish endurance before another hit.
 blocker.AddPressure(22, 11.6f);
-Near(blocker.Pressure, 57, "Damage after break expiry starts from recovered pressure");
-Check(!blocker.Broken(11.6f), "Break expiry is independent of update ordering");
+Near(blocker.Pressure, 100, "Damage after break expiry preserves unrecovered exhaustion");
+Check(blocker.Broken(11.6f), "Another hit before concentration recovery can break balance again");
 
 var idle = new PostureState();
 idle.AddPressure(60, 20);
@@ -292,20 +366,20 @@ fighting.AddPressure(70, 0);
 fighting.Tick(1, 1);
 fighting.AddPressure(100, 1);
 fighting.Tick(.1f, 2.3f);
-Near(fighting.Pressure, 35, "Break recovery retains its explicit partial-load reset");
+Near(fighting.Pressure, 100, "Ending a break cannot reset concentration load");
 for (int step = 0; step < 10; step++)
 {
     float now = 3 + step * .5f;
     fighting.Deflect(now);
     fighting.Tick(.5f, now);
 }
-Near(fighting.Pressure, 35, "Continuous parries never restore load");
+Near(fighting.Pressure, 100, "Continuous parries never restore load");
 fighting.SetBlocking(false, 8);
 fighting.RecordCombat(8);
 fighting.Tick(.1f, 9.9f);
-Near(fighting.Pressure, 35, "Starting an attack also prevents passive recovery");
+Near(fighting.Pressure, 100, "Starting an attack also prevents passive recovery");
 fighting.Tick(.1f, 10.1f);
-Check(fighting.Pressure < 35, "Concentration recovers after genuine rest");
+Near(fighting.Pressure, 92.8f, "Concentration recovers gradually after genuine rest");
 var roller = new PostureState();
 roller.SetBlocking(true, 10);
 Check(roller.TrySpendForRoll(20, 10), "A roll can spend available concentration");
@@ -395,7 +469,9 @@ Check(!heavyAttacker.TrySpendForStrongAttack(195, 9.2f), "An existing stagger st
 heavyAttacker.CompleteStrongAttack(10);
 Check(!heavyAttacker.Broken(10.42f), "Completing the same strike twice cannot extend its stagger");
 heavyAttacker.Tick(.1f, 10.42f);
-Near(heavyAttacker.Pressure, 35, "Exhausting strike uses the usual post-break recovery");
+Near(heavyAttacker.Pressure, 100, "Exhausting strike cannot instantly recover concentration after its stagger");
+heavyAttacker.Tick(.1f, 11.3f);
+Near(heavyAttacker.Pressure, 92.8f, "Exhausting strike uses gradual post-break recovery");
 heavyAttacker.ConfigureEndurance(200);
 Check(heavyAttacker.TrySpendForStrongAttack(195, 20), "An affordable strike spends its full cost");
 Near(heavyAttacker.RemainingEndurance, 5, "Affordable strike leaves its remaining reserve");

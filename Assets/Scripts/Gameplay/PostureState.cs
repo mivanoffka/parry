@@ -90,13 +90,18 @@ namespace Parry
             if (amount <= 0) return;
             RecordCombat(now);
             if (Broken(now)) return;
-            if (Pressure >= Maximum && !strongAttackBreakPending) Pressure = 35;
             Pressure = Math.Min(Maximum, Pressure + NormalizeCost(amount));
             if (Pressure >= Maximum)
             {
                 brokenUntil = now + 1.25f;
                 Blocking = false;
             }
+        }
+        public void Parry(float now, bool powerful = false)
+        {
+            Deflect(now);
+            // A timed defense spends endurance but cannot break the defender's balance.
+            Pressure = Math.Min(Maximum, Pressure + NormalizeCost(powerful ? 40 : 14));
         }
         public void Deflect(float now)
         {
@@ -149,7 +154,6 @@ namespace Parry
             float elapsed = Math.Max(0, deltaTime);
             bool resting = now > recoverAfter && !Disrupted(now) && !strongAttackBreakPending;
             if (Broken(now)) return;
-            if (Pressure >= Maximum && !strongAttackBreakPending) { Pressure = 35; recoverAfter = Math.Max(recoverAfter, now + .5f); resting = false; }
             if (resting)
                 Recover(NormalizeCost((Blocking ? 28 : 18) * elapsed));
         }

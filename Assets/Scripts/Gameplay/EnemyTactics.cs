@@ -15,6 +15,13 @@ namespace Parry
         public bool Retreating { get; private set; }
         public bool Aggressive { get; private set; } = true;
         public bool UrgentRetreat { get; private set; }
+        public float AttackBlockedUntil { get; private set; }
+
+        public void RecordBlock(float now, float duration) =>
+            AttackBlockedUntil = Math.Max(AttackBlockedUntil, now + Math.Max(0, duration));
+
+        public void RecordParry(float now, float duration) =>
+            AttackBlockedUntil = now + Math.Max(0, duration);
 
         float retreatUntil, reengageUntil, recentGain, lastPressure, lastUpdate;
         bool sampled;
@@ -71,6 +78,7 @@ namespace Parry
 
         public void Reset()
         {
+            AttackBlockedUntil = 0;
             Retreating = UrgentRetreat = sampled = ExploitingWeakness = false;
             Aggressive = true;
             retreatUntil = reengageUntil = recentGain = lastPressure = lastUpdate = 0;

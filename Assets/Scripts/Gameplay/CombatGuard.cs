@@ -103,10 +103,9 @@ namespace Parry
             if (!Blocking || Disrupted || Vector3.Angle(Facing, -incomingDirection) > 70) return DefenseResult.Hit;
             if (allowParry && State.CanParry(Time.time))
             {
-                State.Deflect(Time.time);
+                State.Parry(Time.time, powerful);
                 if (powerful)
                 {
-                    State.AddPressure(80, Time.time);
                     PushApart(attacker, incomingDirection);
                 }
                 if (attacker != null)
@@ -158,11 +157,12 @@ namespace Parry
             background.sortingOrder = 100;
             bar.sortingOrder = 101;
             background.positionCount = bar.positionCount = 2;
-            flash = DemoArt.Line("Weapon clash", transform, Color.yellow, .055f);
+            flash = DemoArt.Line("Weapon clash", transform, ParrySparks.ImpactColor(true), .055f);
             flash.enabled = false;
         }
         void Signal(string text, bool parry)
         {
+            GetComponent<CharacterPresentation>()?.Impact(parry);
             feedback = text; feedbackUntil = Time.time + .65f;
             flash.enabled = true; flash.positionCount = 12;
             Vector3 center = transform.position + Facing * .6f + Vector3.up * .85f;
@@ -174,7 +174,7 @@ namespace Parry
                 flash.SetPosition(i * 2, center + ray * .06f);
                 flash.SetPosition(i * 2 + 1, center + ray * (parry ? .65f : .3f));
             }
-            flash.startColor = flash.endColor = parry ? new Color(1, .75f, .15f) : new Color(.45f, .07f, .015f);
+            flash.startColor = flash.endColor = ParrySparks.ImpactColor(parry);
         }
         void LateUpdate()
         {

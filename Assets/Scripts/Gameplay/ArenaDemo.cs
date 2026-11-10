@@ -22,6 +22,10 @@ namespace Parry
         public float BaseAttackRadius => Mathf.Clamp(baseAttackRadius, .5f, 8f);
         public bool CircularAttacks { get => circularAttacks; set => circularAttacks = value; }
         Vector3 cameraVelocity;
+        float targetCameraSize;
+        float currentCameraSize;
+        float initialCameraSize;
+        float zoomVelocity;
         Vector3 cameraPosition;
         VolumeProfile feedbackProfile;
         ColorAdjustments healthFilter;
@@ -35,6 +39,8 @@ namespace Parry
             PracticeTarget.ResetCounter();
             CombatAudio.Initialize(transform);
             cameraPosition = view.transform.position;
+            targetCameraSize = view.orthographicSize;
+            initialCameraSize = currentCameraSize = targetCameraSize;
             feedbackProfile = feedbackVolume.profile;
             feedbackProfile.TryGet(out healthFilter);
             feedbackProfile.TryGet(out concentrationDistortion);
@@ -193,7 +199,23 @@ namespace Parry
         void LateUpdate()
         {
             if (player == null) return;
-            cameraPosition = Vector3.SmoothDamp(cameraPosition, player.transform.position + cameraOffset, ref cameraVelocity, .16f);
+            if (Mouse.current != null && Application.isFocused)
+            {
+                float scroll = Mouse.current.scroll.ReadValue().y;
+                // Input System 1.20 normalizes wheel ticks unless native ranges are requested.
+                if (InputSystem.settings.scrollDeltaBehavior == InputSettings.ScrollDeltaBehavior.KeepPlatformSpecificInputRange
+                    && (Application.platform == RuntimePlatform.WindowsPlayer || Application.platform == RuntimePlatform.WindowsEditor))
+                    scroll /= 120f;
+                targetCameraSize = Mathf.Clamp(targetCameraSize
+                    - scroll * .5f, 3f, 14f);
+            }
+            currentCameraSize = Mathf.SmoothDamp(currentCameraSize,
+                targetCameraSize, ref zoomVelocity, .24f);
+            // Perspective cameras zoom by changing follow distance; orthographic cameras change size.
+            Vector3 followOffset = cameraOffset;
+            if (view.orthographic) view.orthographicSize = currentCameraSize;
+            else followOffset *= currentCameraSize / initialCameraSize;
+            cameraPosition = Vector3.SmoothDamp(cameraPosition, player.transform.position + followOffset, ref cameraVelocity, .16f);
             if (Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame)
             {
                 player.Respawn();
@@ -211,7 +233,7 @@ namespace Parry
             GUI.Box(new Rect(12, 12, 355, 88), GUIContent.none);
             GUI.Label(new Rect(22, 19, 335, 18), "WASD / Arrows: move  •  Mouse: aim  •  LMB / J: attack", controlsLabel);
             GUI.Label(new Rect(22, 37, 335, 18), "Hold RMB / K / LB: block  •  Tap before impact: parry", controlsLabel);
-            GUI.Label(new Rect(22, 55, 335, 18), "Space: dodge  •  R: revive / heal", controlsLabel);
+            GUI.Label(new Rect(22, 55, 335, 18), "Space: dodge  •  R: revive / heal  •  Scroll: zoom", controlsLabel);
             GUI.Label(new Rect(22, 73, 335, 18), "1: normal  •  2: prepare lunge  •  Click attack: execute", controlsLabel);
         }
     }

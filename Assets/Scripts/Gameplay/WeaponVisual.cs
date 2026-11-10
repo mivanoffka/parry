@@ -5,6 +5,9 @@ namespace Parry
     // Upright sword poses convey aim through hand placement and depth, not a screen-space pointer.
     public sealed class WeaponVisual : MonoBehaviour
     {
+        public float WindupProgress { get; private set; }
+        public float SwingProgress { get; private set; } = -1;
+        public float RecoveryProgress { get; private set; }
         SpriteRenderer blade;
         static Sprite sword;
         static Material chargeMaterial;
@@ -112,6 +115,9 @@ namespace Parry
             float reach = 2.5f, float halfAngle = 35, float recovery = 0, bool circular = false, bool lunge = false, bool powerful = false, bool thrustStance = false)
         {
             blade.enabled = visible;
+            WindupProgress = windup;
+            SwingProgress = swing;
+            RecoveryProgress = recovery;
             if (!visible) return;
             Camera camera = Camera.main;
             Vector3 right = camera.transform.right;

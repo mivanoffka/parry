@@ -39,6 +39,7 @@ namespace Parry
             healthBar.positionCount = 2;
         }
         public static void ResetCounter() => Hits = 0;
+        public void SetBodyColor(Color color) { baseColor = color; if (visual != null) visual.color = color; }
         public void ConfigureDurability(int hitPoints, float knockbackSpeed)
         {
             maxHealth = Mathf.Max(1, hitPoints);

@@ -1,6 +1,7 @@
 # Parry — 2.5D movement and melee prototype
 
 Open `Assets/Scenes/SampleScene.unity` in Unity 6000.6.3f1 and press Play.
+Scroll the mouse wheel up to zoom in or down to zoom out. Zoom eases smoothly toward the selected scale and stops at minimum/maximum limits. This also works in the AI duel, where manual zoom adjusts the automatic framing.
 For an AI-versus-AI spectator level, open `Assets/Scenes/AIDuel.unity` and press Play. The crimson and azure enemies fight each other using the same combat AI, automatically respawn after defeat, and share a camera that keeps both in view. Their positions, stats and opponent references are saved in the scene and editable in the Inspector. This scene is also included in Build Settings.
 The `Parry Gameplay Demo` scene object contains the saved arena, player, five training dummies, active melee enemy, fill lights and feedback volume. They are visible and editable before Play. Generated character/shadow sprites, materials and the feedback profile are saved in `Assets/Art/Generated`. Play initializes combat, weapons, indicators and spark emitters without recreating the arena.
 

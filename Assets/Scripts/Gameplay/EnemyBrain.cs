@@ -24,6 +24,8 @@ namespace Parry
         [Header("Emergency defense")]
         [SerializeField] float emergencyGuardPressure = 45;
         [SerializeField, Range(0, 1)] float parryChance = .5f;
+        [SerializeField, Min(0)] float counterattackDelayAfterParry = .7f;
+        [SerializeField, Min(0)] float counterattackDelayAfterBlock = 1.2f;
 
         [Header("Concentration tactics")]
         [SerializeField] float retreatSpeed = 9f;
@@ -89,6 +91,7 @@ namespace Parry
         bool closingRoll;
         Vector3 rollDirection;
         public bool Rolling => state == State.Roll;
+        public float RollProgress => 1 - Mathf.Clamp01(rollRemaining / Mathf.Max(.001f, rollDuration));
         public string TacticalStatus => !health.IsAlive ? "DEFEATED" : Guard.Disrupted ? "STAGGERED"
             : Rolling ? (closingRoll ? "CLOSING" : "ESCAPING")
             : tactics.Retreating ? "RECOVERING" : tactics.Aggressive ? "PRESSING" : "CAUTIOUS";
@@ -121,6 +124,8 @@ namespace Parry
             Guard = GetComponent<CombatGuard>();
             Guard.State.ConfigureEndurance(endurance);
             visual = GetComponentInChildren<SpriteRenderer>();
+            CharacterPresentation.Install(gameObject, visual, true);
+            health.SetBodyColor(Color.white);
             warning = DemoArt.Line("Enemy attack warning", transform, new Color(1, .23f, .18f), .07f);
             warning.enabled = false;
             shadow = transform.Find("Ground shadow");
@@ -280,10 +285,11 @@ namespace Parry
 
         void BeginWindup(bool newCombo)
         {
-            if (Time.time < nextAttackAt)
+            float attackReadyAt = Mathf.Max(nextAttackAt, tactics.AttackBlockedUntil);
+            if (Time.time < attackReadyAt)
             {
                 BeginGuard();
-                stateUntil = Mathf.Max(stateUntil, nextAttackAt);
+                stateUntil = Mathf.Max(stateUntil, attackReadyAt);
                 return;
             }
             state = State.Windup;
@@ -423,8 +429,22 @@ namespace Parry
             bool newAttack = TargetThreatening && !observedPlayerAttack;
             if (TargetThreatening) observedPlayerAttack = true;
             PrepareDefense(-direction, newAttack);
-            if (Guard.Defend(attacker, direction, Random.value < parryChance, unblockable) != DefenseResult.Hit)
+            DefenseResult defense = Guard.Defend(attacker, direction, Random.value < parryChance, unblockable);
+            if (defense != DefenseResult.Hit)
             {
+                comboRemaining = 0;
+                if (defense == DefenseResult.Parry)
+                {
+                    tactics.RecordParry(Time.time, counterattackDelayAfterParry);
+                    state = State.Guard;
+                    stateUntil = tactics.AttackBlockedUntil;
+                }
+                else
+                {
+                    tactics.RecordBlock(Time.time, counterattackDelayAfterBlock);
+                    BeginGuard();
+                    stateUntil = Mathf.Max(stateUntil, tactics.AttackBlockedUntil);
+                }
                 if (Guard.Disrupted) { state = State.Recovery; warning.enabled = false; }
                 return;
             }

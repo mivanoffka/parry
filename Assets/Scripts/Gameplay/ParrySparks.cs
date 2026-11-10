@@ -12,6 +12,8 @@ namespace Parry
         float flashUntil;
         float flashPeak, flashDuration;
         static Material sparkMaterial;
+        public static Color ImpactColor(bool parry) =>
+            parry ? new Color(1, .46f, .12f) : new Color(.85f, .28f, .035f);
 
         void Awake()
         {
@@ -36,7 +38,7 @@ namespace Parry
             flashLight = lightObject.AddComponent<Light>();
             flashLight.type = LightType.Point;
             flashLight.renderMode = LightRenderMode.ForcePixel;
-            flashLight.color = new Color(1, .72f, .32f);
+            flashLight.color = ImpactColor(true);
             flashLight.range = 5;
             flashLight.shadows = LightShadows.None;
             flashLight.enabled = false;
@@ -65,8 +67,8 @@ namespace Parry
             var gradient = new Gradient();
             gradient.SetKeys(new[] {
                 new GradientColorKey(Color.white, 0),
-                new GradientColorKey(new Color(1, .82f, .42f), .35f),
-                new GradientColorKey(new Color(1, .3f, .07f), 1)
+                new GradientColorKey(new Color(1, .9f, .7f), .35f),
+                new GradientColorKey(new Color(1, .75f, .4f), 1)
             }, new[] { new GradientAlphaKey(1, 0), new GradientAlphaKey(.9f, .3f), new GradientAlphaKey(0, 1) });
             color.color = gradient;
             var size = particles.sizeOverLifetime;
@@ -85,33 +87,37 @@ namespace Parry
 
         public void Burst(Vector3 contact, Vector3 attackDirection, bool parry = true)
         {
-            Color impactColor = parry ? new Color(1, .72f, .16f) : new Color(.2f, .035f, .008f);
+            // Keep individual block fragments HDR-bright for bloom; reduce the burst's size and
+            // particle count instead of dimming each spark into a flat red fleck.
+            Color impactColor = ImpactColor(parry);
             var camera = Camera.main;
             Vector3 right = camera.transform.right, up = camera.transform.up;
             // Offset the hot core slightly toward the camera, clear of the sprite planes.
             contact -= camera.transform.forward * .18f;
-            for (int i = 0; i < (parry ? sparkCount : sparkCount / 3); i++)
+            for (int i = 0; i < (parry ? sparkCount : sparkCount / 2); i++)
             {
                 float angle = Random.Range(0, Mathf.PI * 2);
                 Vector3 spread = right * Mathf.Cos(angle) + up * Mathf.Sin(angle);
                 var particle = new ParticleSystem.EmitParams
                 {
                     position = contact,
-                    velocity = (spread + attackDirection * Random.Range(-.18f, .32f)).normalized * Random.Range(speed * .45f, speed),
-                    startLifetime = Random.Range(.22f, .6f),
-                    startSize = Random.Range(.025f, .06f),
+                    velocity = (spread + attackDirection * Random.Range(-.18f, .32f)).normalized
+                        * Random.Range(speed * .45f, speed) * (parry ? 1 : .7f),
+                    startLifetime = parry ? Random.Range(.22f, .6f) : Random.Range(.2f, .42f),
+                    startSize = parry ? Random.Range(.025f, .06f) : Random.Range(.035f, .065f),
                     startColor = impactColor
                 };
                 sparks.Emit(particle, 1);
             }
-            flare.Emit(new ParticleSystem.EmitParams { position = contact, startLifetime = parry ? .16f : .1f, startSize = parry ? 1.5f : .7f, startColor = impactColor }, 1);
+            flare.Emit(new ParticleSystem.EmitParams { position = contact, startLifetime = parry ? .16f : .12f, startSize = parry ? 1.5f : .6f, startColor = impactColor }, 1);
             // Emit() works on a stopped system; Play keeps its particle simulation advancing.
             if (!sparks.isPlaying) sparks.Play();
             if (!flare.isPlaying) flare.Play();
             flashLight.transform.position = contact - camera.transform.forward * .8f + Vector3.up * .2f;
-            flashPeak = parry ? 18 : 4.5f;
-            flashDuration = parry ? .18f : .1f;
-            flashLight.color = parry ? new Color(1, .72f, .16f) : new Color(1, .16f, .025f);
+            flashPeak = parry ? 18 : 5.5f;
+            flashDuration = parry ? .18f : .13f;
+            flashLight.range = parry ? 5 : 3.5f;
+            flashLight.color = impactColor;
             flashLight.intensity = flashPeak;
             flashLight.enabled = true;
             flashUntil = Time.time + flashDuration;
