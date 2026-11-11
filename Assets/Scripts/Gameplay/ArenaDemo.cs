@@ -5,6 +5,7 @@ using UnityEngine.Rendering.Universal;
 
 namespace Parry
 {
+    [DefaultExecutionOrder(-100)]
     public sealed class ArenaDemo : MonoBehaviour
     {
         [SerializeField] PlayerMotor player;
@@ -26,7 +27,11 @@ namespace Parry
         float currentCameraSize;
         float initialCameraSize;
         float zoomVelocity;
-        Vector3 cameraPosition;
+        Vector3 cameraPosition, cameraFocus;
+        [Header("Zoom tilt")]
+        [SerializeField, Range(5, 80)] float closeZoomPitch = 28;
+        [SerializeField, Range(5, 80)] float distantZoomPitch = 58;
+        float normalCameraPitch;
         VolumeProfile feedbackProfile;
         ColorAdjustments healthFilter;
         LensDistortion concentrationDistortion;
@@ -41,6 +46,8 @@ namespace Parry
             PracticeTarget.ResetCounter();
             CombatAudio.Initialize(transform);
             cameraPosition = view.transform.position;
+            cameraFocus = player.transform.position;
+            normalCameraPitch = view.transform.eulerAngles.x;
             targetCameraSize = view.orthographicSize;
             initialCameraSize = currentCameraSize = targetCameraSize;
             feedbackProfile = feedbackVolume.profile;
@@ -89,6 +96,22 @@ namespace Parry
             }
             for (int i = 0; i < 4; i++)
             {
+                var prefab = Resources.Load<GameObject>("Combat/Enemy");
+                if (prefab != null)
+                {
+#if UNITY_EDITOR
+                    var instance = Application.isPlaying ? Instantiate(prefab, transform)
+                        : (GameObject)UnityEditor.PrefabUtility.InstantiatePrefab(prefab, transform);
+#else
+                    var instance = Instantiate(prefab, transform);
+#endif
+                    instance.name = "Enemy — melee pursuer " + (i + 1);
+                    instance.transform.position = new Vector3((i % 2 == 0 ? -1 : 1) * (i < 2 ? 2 : 4), 0, i < 2 ? 6 : 3);
+                    var brain = instance.GetComponent<EnemyBrain>();
+                    brain.Initialize(player);
+                    if (i == 0) enemyFighter = brain;
+                    continue;
+                }
                 var enemy = new GameObject("Enemy — melee pursuer " + (i + 1));
                 enemy.transform.SetParent(transform);
                 enemy.transform.position = new Vector3((i % 2 == 0 ? -1 : 1) * (i < 2 ? 2 : 4), 0, i < 2 ? 6 : 3);
@@ -221,15 +244,20 @@ namespace Parry
                     && (Application.platform == RuntimePlatform.WindowsPlayer || Application.platform == RuntimePlatform.WindowsEditor))
                     scroll /= 120f;
                 targetCameraSize = Mathf.Clamp(targetCameraSize
-                    - scroll * .5f, 3f, 14f);
+                    - scroll * .25f, 3f, 14f);
             }
             currentCameraSize = Mathf.SmoothDamp(currentCameraSize,
-                targetCameraSize, ref zoomVelocity, .24f);
+                targetCameraSize, ref zoomVelocity, .4f);
             // Perspective cameras zoom by changing follow distance; orthographic cameras change size.
-            Vector3 followOffset = cameraOffset;
+            float pitch = CameraZoom.Pitch(currentCameraSize, initialCameraSize, 14,
+                normalCameraPitch, closeZoomPitch, distantZoomPitch);
+            Quaternion cameraRotation = Quaternion.Euler(pitch, 0, 0);
+            Vector3 followOffset = -(cameraRotation * Vector3.forward) * cameraOffset.magnitude;
             if (view.orthographic) view.orthographicSize = currentCameraSize;
             else followOffset *= currentCameraSize / initialCameraSize;
-            cameraPosition = Vector3.SmoothDamp(cameraPosition, player.transform.position + followOffset, ref cameraVelocity, .16f);
+            cameraFocus = Vector3.SmoothDamp(cameraFocus, player.transform.position, ref cameraVelocity, .16f);
+            cameraPosition = cameraFocus + followOffset;
+            view.transform.rotation = cameraRotation;
             if (Keyboard.current != null && Keyboard.current.rKey.wasPressedThisFrame)
             {
                 player.Respawn();
@@ -249,6 +277,8 @@ namespace Parry
             GUI.Label(new Rect(22, 37, 335, 18), "Hold RMB / K / LB: block  •  Tap before impact: parry", controlsLabel);
             GUI.Label(new Rect(22, 55, 335, 18), "Space: dodge  •  R: revive / heal  •  Scroll: zoom", controlsLabel);
             GUI.Label(new Rect(22, 73, 335, 18), "1 / 2: style  •  Alt / Option: relax", controlsLabel);
+            GUI.Box(new Rect(12, 194, 420, 28), "Tab / MMB: target lock  •  Q / E: switch  •  Esc: release");
+            GUI.Label(new Rect(22, 224, 500, 24), "Lunge feint: aim before release (hold Shift to override target lock)", controlsLabel);
         }
     }
 }

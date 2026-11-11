@@ -44,9 +44,17 @@ namespace Parry
     public sealed class PostureState
     {
         public const float Maximum = 100;
+        public const int WarmupPerStrongAttack = 3;
+        public const int MaximumWarmup = WarmupPerStrongAttack * 2;
+        public int Warmup { get; private set; }
+        public int StrongAttackCharges => Warmup / WarmupPerStrongAttack;
+        public bool StrongAttackReady => StrongAttackCharges > 0;
+        public void RecordOrdinaryContact() => Warmup = Math.Min(MaximumWarmup, Warmup + 1);
+        public void RecordSuccessfulParry() => Warmup = Math.Min(MaximumWarmup, Warmup + 2);
         public float Pressure { get; private set; }
         public int EndurancePoints { get; private set; } = 100;
         public float RemainingEndurance => (Maximum - Pressure) * EndurancePoints / Maximum;
+        public float PowerfulParryCost => Math.Max(80, EndurancePoints * .35f);
         public void ConfigureEndurance(int points)
         {
             EndurancePoints = Math.Max(1, points);
@@ -150,9 +158,10 @@ namespace Parry
         }
         public void Parry(float now, bool powerful = false)
         {
+            RecordSuccessfulParry();
             Deflect(now);
             // A timed defense spends endurance but cannot break the defender's balance.
-            Pressure = Math.Min(Maximum, Pressure + NormalizeCost(powerful ? 40 : 14));
+            Pressure = Math.Min(Maximum, Pressure + NormalizeCost(powerful ? PowerfulParryCost : 14));
         }
         public void Deflect(float now)
         {
@@ -176,7 +185,8 @@ namespace Parry
         public bool TrySpendForPreparation(float pressureCost, float now) => TrySpendConcentration(pressureCost, now);
         public bool TrySpendForStrongAttack(float pressureCost, float now)
         {
-            if (pressureCost < 0 || Disrupted(now) || strongAttackBreakPending) return false;
+            if (pressureCost < 0 || !CanAttack(now) || strongAttackBreakPending || !StrongAttackReady) return false;
+            Warmup -= WarmupPerStrongAttack;
             CancelRelaxation();
             RecordCombat(now);
             Blocking = false;
@@ -228,6 +238,7 @@ namespace Parry
         }
         public void Reset()
         {
+            Warmup = 0;
             Pressure = brokenUntil = recoilUntil = parryUntil = nextParry = recoverAfter = attacksBlockedUntil = 0;
             Blocking = false;
             strongAttackBreakPending = parryArmed = anticipatedAttack = false;

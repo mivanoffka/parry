@@ -4,6 +4,11 @@ namespace Parry
 {
     public static class EnemyFlankingRules
     {
+        public static bool AttackIndependently(int readyAllies, bool targetOpen, bool allyAttacking, bool targetDistracted) =>
+            readyAllies <= 1 || targetOpen || allyAttacking || targetDistracted;
+        public static bool LaunchTogether(int allies, int ready, bool spread, bool waitExpired) =>
+            allies >= 2 && ready >= 2 && ((ready == allies && spread) || waitExpired);
+
         // Stable ranks keep allies from swapping sides on every movement update.
         public static float TurnToSlot(float currentHeading, float anchorHeading, int rank, int count)
         {
@@ -40,6 +45,9 @@ namespace Parry
 
         readonly Func<float> randomValue;
         float retreatUntil, reengageUntil, nextDecisionAt = float.NegativeInfinity;
+        float recoveryBlockedSince = float.NegativeInfinity;
+        float safeRecoverySince = float.NegativeInfinity;
+        float forcedCombatUntil;
         public EnemyTactics(Func<float> randomValue = null)
         {
             var random = new Random();
@@ -57,15 +65,32 @@ namespace Parry
         }
         public void Update(float pressure, float now, int endurance = 100,
             bool threatened = false, bool opening = false, float opponentPressure = 0, bool opponentDisrupted = false,
-            float decisionInterval = 1)
+            float decisionInterval = 1, bool protectingAlly = false, bool recoveringSafely = true,
+            float maximumRecoveryAttempt = 5, float forcedCombatDuration = 3)
         {
             float advantage = Math.Clamp(opponentPressure, 0, 100) - Math.Clamp(pressure, 0, 100);
             FullOffense = advantage >= (FullOffense ? AdvantageExit : AdvantageEntry);
             bool weakOpponent = opponentPressure >= OpponentWeaknessThreshold;
             ExploitingWeakness = opponentDisrupted || FullOffense;
+            if (now < forcedCombatUntil)
+            {
+                Retreating = UrgentRetreat = false;
+                recoveryBlockedSince = safeRecoverySince = float.NegativeInfinity;
+                Aggressive = true;
+                return;
+            }
+            if (ShouldProtectAlly(protectingAlly, threatened, pressure))
+            {
+                Retreating = UrgentRetreat = false;
+                recoveryBlockedSince = safeRecoverySince = float.NegativeInfinity;
+                Aggressive = ExploitingWeakness = true;
+                reengageUntil = now + AttackCommitmentDuration;
+                return;
+            }
             if (opponentDisrupted || FullOffense)
             {
                 Retreating = UrgentRetreat = false;
+                recoveryBlockedSince = safeRecoverySince = float.NegativeInfinity;
                 Aggressive = true;
                 return;
             }
@@ -90,13 +115,38 @@ namespace Parry
                 }
                 else UrgentRetreat = false;
             }
+            if (Retreating)
+            {
+                if (float.IsNegativeInfinity(recoveryBlockedSince)) recoveryBlockedSince = now;
+                if (recoveringSafely)
+                {
+                    if (float.IsNegativeInfinity(safeRecoverySince)) safeRecoverySince = now;
+                    if (now - safeRecoverySince >= 1) recoveryBlockedSince = now;
+                }
+                else safeRecoverySince = float.NegativeInfinity;
+                if (!recoveringSafely && now - recoveryBlockedSince >= Math.Max(.1f, maximumRecoveryAttempt))
+                {
+                    Reengage(pressure, now);
+                    forcedCombatUntil = now + Math.Max(.1f, forcedCombatDuration);
+                    reengageUntil = Math.Max(reengageUntil, forcedCombatUntil);
+                    nextDecisionAt = Math.Max(nextDecisionAt, forcedCombatUntil);
+                }
+            }
+            else recoveryBlockedSince = safeRecoverySince = float.NegativeInfinity;
             ExploitingWeakness = !Retreating && weakOpponent;
-            Aggressive = !Retreating && (ExploitingWeakness || pressure <= AggressiveThreshold);
+            Aggressive = !Retreating && (now < forcedCombatUntil || ExploitingWeakness || pressure <= AggressiveThreshold);
         }
+
+        public static bool CanRelaxAtDistance(float distance, float safeDistance, float opponentReach, bool alreadyRelaxing) =>
+            distance > Math.Max(safeDistance, opponentReach + 2) + (alreadyRelaxing ? 0 : .5f);
+
+        public static bool ShouldProtectAlly(bool allyThreatened, bool personallyThreatened, float pressure) =>
+            allyThreatened && !personallyThreatened && pressure < 90;
 
         public void Reengage(float pressure, float now)
         {
             Retreating = UrgentRetreat = false;
+            recoveryBlockedSince = safeRecoverySince = float.NegativeInfinity;
             Aggressive = ExploitingWeakness || (!UrgentRetreat && pressure <= AggressiveThreshold);
             reengageUntil = now + AttackCommitmentDuration;
         }
@@ -110,7 +160,8 @@ namespace Parry
             AttackBlockedUntil = 0;
             Retreating = UrgentRetreat = ExploitingWeakness = FullOffense = false;
             Aggressive = true;
-            retreatUntil = reengageUntil = 0;
+            retreatUntil = reengageUntil = forcedCombatUntil = 0;
+            recoveryBlockedSince = safeRecoverySince = float.NegativeInfinity;
             nextDecisionAt = float.NegativeInfinity;
         }
     }

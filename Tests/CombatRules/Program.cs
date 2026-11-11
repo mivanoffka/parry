@@ -9,6 +9,149 @@ void Check(bool condition, string description)
 }
 void Near(float actual, float expected, string description) => Check(Math.Abs(actual - expected) < .01f, description);
 
+void ChargeStrongAttack(PostureState state)
+{
+    for (int i = 0; i < PostureState.MaximumWarmup; i++) state.RecordOrdinaryContact();
+}
+var warmup = new PostureState();
+warmup.ConfigureEndurance(1000);
+Check(!warmup.StrongAttackReady && warmup.StrongAttackCharges == 0, "Combat starts without powerful attack charges");
+Check(!warmup.TrySpendForStrongAttack(390, 0), "A powerful opening attack requires warmup");
+Near(warmup.RemainingEndurance, 1000, "An uncharged attempt spends no concentration");
+Check(warmup.TrySpendForAttack(15, .1f) && warmup.Warmup == 0, "Starting a swing without contact cannot farm warmup");
+warmup.Block(.2f);
+Check(warmup.Warmup == 0, "Ordinary blocking does not charge powerful attacks");
+warmup.Reset();
+warmup.RecordOrdinaryContact(); warmup.RecordOrdinaryContact();
+Check(!warmup.StrongAttackReady, "Two ordinary contacts do not yet unlock a powerful attack");
+warmup.RecordOrdinaryContact();
+Check(warmup.StrongAttackCharges == 1, "Three ordinary contacts unlock one powerful attack");
+Check(warmup.TrySpendForStrongAttack(390, 1), "A charged powerful attack commits");
+Check(warmup.Warmup == 0 && !warmup.StrongAttackReady, "A powerful attack consumes one full charge");
+Near(warmup.RemainingEndurance, 610, "Warmup cost is additional to concentration cost");
+Check(!warmup.TrySpendForStrongAttack(390, 2), "The next powerful attack requires rebuilding warmup");
+for (int i = 0; i < 10; i++) warmup.RecordSuccessfulParry();
+Check(warmup.Warmup == 6 && warmup.StrongAttackCharges == 2, "Warmup stores at most two powerful attacks");
+Check(warmup.TrySpendForStrongAttack(100, 3) && warmup.StrongAttackCharges == 1, "First banked attack leaves the second charge");
+Check(warmup.TrySpendForStrongAttack(100, 4) && warmup.StrongAttackCharges == 0, "Second banked attack uses the last charge");
+Check(!warmup.TrySpendForStrongAttack(100, 5), "A third consecutive powerful attack needs new warmup");
+warmup.Reset(); warmup.Parry(10);
+Check(warmup.Warmup == 2, "A successful parry grants two warmup units");
+warmup.RecordOrdinaryContact();
+Check(warmup.StrongAttackReady, "Attacks and parries combine to charge a powerful attack");
+int savedWarmup = warmup.Warmup;
+warmup.Recoil(11);
+Check(!warmup.TrySpendForStrongAttack(100, 11.01f) && warmup.Warmup == savedWarmup, "A staggered attempt cannot consume warmup");
+Check(!warmup.TrySpendForStrongAttack(-100, 12) && warmup.Warmup == savedWarmup, "An invalid cost cannot consume warmup");
+warmup.Reset();
+Check(warmup.Warmup == 0, "Respawn resets combat warmup");
+
+Check(!EnemyTactics.CanRelaxAtDistance(2, 5.2f, 2.5f, false), "A nearby opponent prevents entering rest");
+Check(!EnemyTactics.CanRelaxAtDistance(5.2f, 5.2f, 2.5f, true), "Closing to the safe-distance boundary immediately ends rest");
+Check(EnemyTactics.CanRelaxAtDistance(5.4f, 5.2f, 2.5f, true), "An already resting enemy can keep its safe gap");
+Check(!EnemyTactics.CanRelaxAtDistance(5.4f, 5.2f, 2.5f, false), "Reentering rest requires an extra gap to avoid stance flicker");
+Check(EnemyTactics.CanRelaxAtDistance(5.8f, 5.2f, 2.5f, false), "An enemy can rest again after reaching safety");
+Check(!EnemyTactics.CanRelaxAtDistance(6, 5.2f, 5, true), "Longer opponent reach extends the no-rest distance");
+Check(!EnemyTactics.CanRelaxAtDistance(6, 5.2f, 5, false), "A long-range opponent also prevents entering rest");
+
+var chasedEnemy = new EnemyTactics(() => 0);
+chasedEnemy.Update(95, 0, recoveringSafely: false);
+Check(chasedEnemy.Retreating, "An exhausted enemy first attempts to recover");
+chasedEnemy.Update(95, 4.9f, recoveringSafely: false);
+Check(chasedEnemy.Retreating, "A chased enemy gets time to find a resting place");
+chasedEnemy.Update(95, 5, recoveringSafely: false);
+Check(!chasedEnemy.Retreating && !chasedEnemy.UrgentRetreat && chasedEnemy.Aggressive, "Prolonged pursuit forces reengagement despite exhaustion");
+chasedEnemy.Update(99, 7.99f, recoveringSafely: false);
+Check(!chasedEnemy.Retreating && chasedEnemy.Aggressive, "Forced combat prevents immediately running away again");
+chasedEnemy.Update(99, 8, recoveringSafely: false);
+Check(chasedEnemy.Retreating, "An exhausted enemy may retry recovery after combat commitment");
+var briefEscape = new EnemyTactics(() => 0);
+briefEscape.Update(95, 0, recoveringSafely: false);
+briefEscape.Update(95, 4, recoveringSafely: true);
+briefEscape.Update(95, 4.5f, recoveringSafely: false);
+briefEscape.Update(95, 5, recoveringSafely: false);
+Check(!briefEscape.Retreating, "A brief gap cannot reset prolonged unsuccessful recovery");
+var safeEscape = new EnemyTactics(() => 0);
+safeEscape.Update(95, 0, recoveringSafely: false);
+safeEscape.Update(95, 4, recoveringSafely: true);
+safeEscape.Update(95, 5, recoveringSafely: true);
+safeEscape.Update(95, 5.1f, recoveringSafely: false);
+Check(safeEscape.Retreating, "A second of safe rest resets the unsuccessful recovery timer");
+safeEscape.Update(95, 10, recoveringSafely: false);
+Check(!safeEscape.Retreating && safeEscape.Aggressive, "Renewed pursuit eventually forces another reengagement");
+chasedEnemy.Reset();
+chasedEnemy.Update(95, 0, recoveringSafely: false);
+Check(chasedEnemy.Retreating, "Respawn clears pursuit history and forced combat lockout");
+var shortRetreat = new EnemyTactics(() => 0);
+shortRetreat.Update(95, 0, recoveringSafely: false, maximumRecoveryAttempt: 2, forcedCombatDuration: 4);
+shortRetreat.Update(95, 2, recoveringSafely: false, maximumRecoveryAttempt: 2, forcedCombatDuration: 4);
+shortRetreat.Update(95, 5.9f, recoveringSafely: false, maximumRecoveryAttempt: 2, forcedCombatDuration: 4);
+Check(!shortRetreat.Retreating && shortRetreat.Aggressive, "Retreat timeout and combat commitment support custom durations");
+
+Near(SwordStep.Distance(0, .05f, .24f, .3f), 0, "An early windup does not step forward");
+Near(SwordStep.Distance(0, 1, .24f, .3f), .3f, "A long frame cannot exceed one sword step");
+Near(SwordStep.Distance(.3f, .1f, .24f, .3f), 0, "Recovery cannot repeat the forward step");
+Near(SwordStep.Distance(.14f, .05f, .24f, .3f), .15f, "The sword step advances smoothly through the windup release");
+float totalSwordStep = 0;
+for (int frame = 0; frame < 60; frame++) totalSwordStep += SwordStep.Distance(frame / 60f, 1f / 60, .24f, .3f);
+Near(totalSwordStep, .3f, "Sword step distance is independent of frame rate");
+Near(SwordStep.Distance(0, .1f, .05f, .3f), .3f, "A short windup still takes exactly one step");
+Near(SwordStep.Distance(0, .1f, .05f, 0), 0, "Setting sword step distance to zero disables movement");
+
+Check(SwordStep.ProvokesRecoil(1, 1, .03f), "A close opponent reacts to an advancing sword step");
+Check(SwordStep.ProvokesRecoil(1.5f, 1, .3f), "The reaction includes opponents reached along the step");
+Check(!SwordStep.ProvokesRecoil(1, 1, 0), "A blocked step cannot cause recoil");
+Check(!SwordStep.ProvokesRecoil(3, 1, .03f), "Distant opponents do not recoil");
+Check(!SwordStep.ProvokesRecoil(1, -1, .03f), "Opponents behind the attacker do not recoil");
+Check(!SwordStep.ProvokesRecoil(1, 0, .03f), "An unrelated sideways step does not repel an opponent");
+
+Near(CameraZoom.Pitch(3, 7, 14), 28, "Closest zoom lowers the camera toward the ground");
+Near(CameraZoom.Pitch(7, 7, 14), 39, "Default zoom preserves the initial camera angle");
+Near(CameraZoom.Pitch(14, 7, 14), 58, "Distant zoom provides a steeper view of the world");
+Near(CameraZoom.Pitch(-10, 7, 14), 28, "Zoom below its limit cannot flatten the camera further");
+Near(CameraZoom.Pitch(100, 7, 14), 58, "Zoom above its limit cannot exceed the distant tilt");
+Near(CameraZoom.Pitch(20, 7, 20), 58, "Duel framing uses its own zoom limit");
+float lastCameraPitch = 28;
+for (int i = 0; i <= 110; i++)
+{
+    float pitch = CameraZoom.Pitch(3 + i * .1f, 7, 14);
+    Check(float.IsFinite(pitch) && pitch >= lastCameraPitch - .001f, "Zoom tilt stays finite and monotonic");
+    lastCameraPitch = pitch;
+}
+Near(CameraZoom.Pitch(7, 7, 14, 45, 30, 65), 45, "Zoom supports the scene's initial pitch and custom limits");
+
+Check(EnemyFlankingRules.AttackIndependently(1, false, false, false), "The only ready fighter attacks without waiting for distant or recovering allies");
+Check(EnemyFlankingRules.AttackIndependently(3, true, false, false), "A broken defense is exploited immediately");
+Check(EnemyFlankingRules.AttackIndependently(2, false, true, false), "An ally already attacking does not hold up an individual follow-up");
+Check(EnemyFlankingRules.AttackIndependently(2, false, false, true), "A fighter can punish the player attacking another enemy");
+Check(!EnemyFlankingRules.AttackIndependently(2, false, false, false), "Two ready fighters can still coordinate when there is no urgent opening");
+Check(EnemyFlankingRules.LaunchTogether(4, 2, false, true), "A short coordination timeout releases available attackers even without perfect formation");
+
+var slashChain = new SlashSequence();
+slashChain.Begin(0, true);
+Check(slashChain.Direction == 1, "First slash uses the ordinary direction");
+slashChain.Finish(1);
+slashChain.Begin(1.05f, true);
+Check(slashChain.Direction == -1, "An immediate follow-up reverses windup and strike");
+slashChain.Finish(2);
+slashChain.Begin(2.05f, true);
+Check(slashChain.Direction == 1, "A third consecutive slash alternates back");
+slashChain.Finish(3);
+slashChain.Begin(3.3f, true);
+Check(slashChain.Direction == 1, "A pause starts a fresh slash sequence");
+slashChain.Finish(4);
+slashChain.Reset();
+slashChain.Begin(4.01f, true);
+Check(slashChain.Direction == 1, "Interruption clears the previous completed slash");
+slashChain.Finish(5);
+slashChain.Begin(5.01f, false);
+Check(slashChain.Direction == 1, "Thrusts do not reverse with slash combos");
+slashChain.Finish(6);
+slashChain.Begin(6.01f, true);
+Check(slashChain.Direction == 1, "A thrust cannot seed a reversed slash");
+slashChain.Begin(6.02f, true);
+Check(slashChain.Direction == 1, "An unfinished attack cannot seed a combo continuation");
+
 foreach (int endurance in new[] { 100, 500, 1000 })
 {
     var lungeDefender = new PostureState();
@@ -28,6 +171,25 @@ foreach (int endurance in new[] { 100, 500, 1000 })
     lungeDefender.Parry(10.1f, true);
     Check(!lungeDefender.Disrupted(10.1f), "Parrying a lunge does not force a balance break");
 }
+
+Check(!EnemyFlankingRules.LaunchTogether(1, 1, true, true), "A lone enemy does not wait for a group attack");
+Check(!EnemyFlankingRules.LaunchTogether(4, 1, true, true), "One ready attacker cannot launch a group wave");
+Check(!EnemyFlankingRules.LaunchTogether(4, 4, false, false), "A clustered group waits to surround the target");
+Check(!EnemyFlankingRules.LaunchTogether(4, 2, true, false), "Ready allies briefly wait for approaching fighters");
+Check(EnemyFlankingRules.LaunchTogether(4, 4, true, false), "A positioned group launches together immediately");
+Check(EnemyFlankingRules.LaunchTogether(4, 2, false, true), "Bounded waiting lets available fighters attack despite a blocked flank");
+
+Check(EnemyTactics.ShouldProtectAlly(true, false, 50), "An available ally comes to the attacked fighter's defense");
+Check(!EnemyTactics.ShouldProtectAlly(true, true, 50), "Personal defense takes priority over protecting an ally");
+Check(!EnemyTactics.ShouldProtectAlly(true, false, 90), "An exhausted fighter does not charge to protect an ally");
+Check(!EnemyTactics.ShouldProtectAlly(false, false, 50), "No protection response without an attacked ally");
+var protector = new EnemyTactics(() => 0);
+protector.Update(50, 0);
+Check(protector.Retreating, "Protection test starts with a retreating fighter");
+protector.RecordBlock(0, 1.2f);
+protector.Update(50, .1f, protectingAlly: true);
+Check(!protector.Retreating && protector.Aggressive && protector.ExploitingWeakness, "An ally under attack provokes immediate intervention");
+Near(protector.AttackBlockedUntil, 1.2f, "Protecting allies preserves counterattack delays");
 
 Near(EnemyFlankingRules.TurnToSlot(0, 0, 1, 2), 180, "Two nearby attackers take opposite sides");
 Near(EnemyFlankingRules.TurnToSlot(180, 0, 1, 2), 0, "An attacker already opposite its ally can attack without circling");
@@ -115,7 +277,20 @@ timedDefender.Tick(.1f, 14.2f);
 Near(timedDefender.Pressure, 100, "Ending a break preserves load until normal recovery resumes");
 timedDefender.ConfigureEndurance(200);
 timedDefender.Parry(20, true);
-Near(timedDefender.RemainingEndurance, 160, "Powerful parry spends forty actual points with configured endurance");
+Near(timedDefender.RemainingEndurance, 120, "Powerful parry spends eighty actual points with configured endurance");
+
+Check(LungeDefenseRules.Caught(.1f, .2f, .3f) == LungeDodgeDefense.Parry, "Caught dodge can parry");
+Check(LungeDefenseRules.Caught(.3f, .2f, .3f) == LungeDodgeDefense.Block, "Caught dodge can block");
+Check(LungeDefenseRules.Caught(.8f, .2f, .3f) == LungeDodgeDefense.Hit, "Caught dodge can take full damage");
+Check(LungeDefenseRules.Caught(.2f, 0, 0) == LungeDodgeDefense.Hit, "Zero defense chances guarantee damage");
+Check(LungeDefenseRules.Caught(.99f, 1, 1) == LungeDodgeDefense.Parry, "Defense probabilities stay bounded");
+var powerfulParryCost = new PostureState();
+powerfulParryCost.Parry(1, true);
+Near(powerfulParryCost.RemainingEndurance, 20, "Powerful parry costs four times a tactical dodge");
+
+powerfulParryCost.ConfigureEndurance(1000);
+powerfulParryCost.Parry(2, true);
+Near(powerfulParryCost.RemainingEndurance, 650, "High-endurance defenders still lose 35 percent to a powerful parry");
 
 var swingCost = new PostureState();
 swingCost.SetBlocking(true, 5);
@@ -604,41 +779,47 @@ Check(baseline.EndurancePoints == 100, "The player's default endurance stays at 
 baseline.AddPressure(28, 40);
 Near(baseline.Pressure, 28, "Baseline concentration balance remains unchanged");
 var heavyAttacker = new PostureState();
-Check(heavyAttacker.TrySpendForStrongAttack(195, 9), "Insufficient endurance still permits a powerful lunge");
+ChargeStrongAttack(heavyAttacker);
+Check(heavyAttacker.TrySpendForStrongAttack(390, 9), "Insufficient endurance still permits a powerful lunge");
 Near(heavyAttacker.RemainingEndurance, 0, "An exhausting lunge consumes all remaining endurance");
 Check(!heavyAttacker.Disrupted(9), "Exhaustion cannot interrupt the strike before it deals damage");
 heavyAttacker.Tick(.1f, 9.1f);
 Near(heavyAttacker.Pressure, 100, "Pending exhaustion cannot receive the post-break reset early");
-Check(!heavyAttacker.TrySpendForStrongAttack(195, 9.1f), "A pending exhausting strike cannot be committed twice");
+Check(!heavyAttacker.TrySpendForStrongAttack(390, 9.1f), "A pending exhausting strike cannot be committed twice");
 heavyAttacker.CompleteStrongAttack(9.16f);
 Check(heavyAttacker.Broken(9.17f), "Finishing an exhausting strike breaks balance");
-Check(!heavyAttacker.TrySpendForStrongAttack(195, 9.2f), "An existing stagger still prevents starting an attack");
+Check(!heavyAttacker.TrySpendForStrongAttack(390, 9.2f), "An existing stagger still prevents starting an attack");
 heavyAttacker.CompleteStrongAttack(10);
 Check(!heavyAttacker.Broken(10.42f), "Completing the same strike twice cannot extend its stagger");
 heavyAttacker.Tick(.1f, 10.42f);
 Near(heavyAttacker.Pressure, 100, "Exhausting strike cannot instantly recover concentration after its stagger");
 heavyAttacker.Tick(.1f, 11.3f);
 Near(heavyAttacker.Pressure, 92.8f, "Exhausting strike uses gradual post-break recovery");
-heavyAttacker.ConfigureEndurance(200);
-Check(heavyAttacker.TrySpendForStrongAttack(195, 20), "An affordable strike spends its full cost");
-Near(heavyAttacker.RemainingEndurance, 5, "Affordable strike leaves its remaining reserve");
+heavyAttacker.ConfigureEndurance(400);
+ChargeStrongAttack(heavyAttacker);
+Check(heavyAttacker.TrySpendForStrongAttack(390, 20), "An affordable strike spends its full cost");
+Near(heavyAttacker.RemainingEndurance, 10, "Affordable strike leaves its remaining reserve");
 heavyAttacker.CompleteStrongAttack(20.16f);
 Check(!heavyAttacker.Broken(20.17f), "An affordable strike does not break balance");
-heavyAttacker.Reset();
-heavyAttacker.AddPressure(5, 30);
-Check(heavyAttacker.TrySpendForStrongAttack(195, 30), "An exactly exhausting strike is allowed");
+heavyAttacker.ConfigureEndurance(390);
+ChargeStrongAttack(heavyAttacker);
+Check(heavyAttacker.TrySpendForStrongAttack(390, 30), "An exactly exhausting strike is allowed");
 heavyAttacker.CompleteStrongAttack(30.16f);
 Check(heavyAttacker.Broken(30.17f), "Spending the final endurance points breaks balance");
 heavyAttacker.Reset();
+ChargeStrongAttack(heavyAttacker);
 heavyAttacker.Recoil(40);
-Check(!heavyAttacker.TrySpendForStrongAttack(195, 40.1f), "Recoil still prevents starting a powerful attack");
+Check(!heavyAttacker.TrySpendForStrongAttack(390, 40.1f), "Recoil still prevents starting a powerful attack");
 heavyAttacker.Reset();
-Check(!heavyAttacker.TrySpendForStrongAttack(-195, 41), "Invalid negative costs cannot restore concentration");
+ChargeStrongAttack(heavyAttacker);
+Check(!heavyAttacker.TrySpendForStrongAttack(-390, 41), "Invalid negative costs cannot restore concentration");
 heavyAttacker.ConfigureEndurance(500);
-Check(heavyAttacker.TrySpendForStrongAttack(195, 50), "Strong attack supports the scene's configured endurance");
-Near(heavyAttacker.RemainingEndurance, 305, "Strong attack costs actual points rather than a percentage");
+ChargeStrongAttack(heavyAttacker);
+Check(heavyAttacker.TrySpendForStrongAttack(390, 50), "Strong attack supports the scene's configured endurance");
+Near(heavyAttacker.RemainingEndurance, 110, "Strong attack costs actual points rather than a percentage");
 heavyAttacker.ConfigureEndurance(100);
-heavyAttacker.TrySpendForStrongAttack(195, 60);
+ChargeStrongAttack(heavyAttacker);
+heavyAttacker.TrySpendForStrongAttack(390, 60);
 heavyAttacker.Reset();
 heavyAttacker.CompleteStrongAttack(61);
 Check(!heavyAttacker.Broken(61), "Respawn clears a pending exhaustion penalty");

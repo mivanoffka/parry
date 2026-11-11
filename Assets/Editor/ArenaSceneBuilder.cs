@@ -301,10 +301,15 @@ namespace Parry.Editor
                         enemy.Guard.ResetCombat();
                         ((EnemyTactics)typeof(EnemyBrain).GetField("tactics", flags).GetValue(enemy)).Reset();
                         typeof(EnemyBrain).GetField("nextAttackAt", flags).SetValue(enemy, 0f);
+                        enemy.transform.position = player.transform.position + Vector3.forward * 8;
                         typeof(EnemyBrain).GetMethod("BeginRetreat", flags).Invoke(enemy, null);
                         if (!enemy.Guard.State.Relaxing || enemy.Guard.Blocking)
                             throw new InvalidOperationException("Enemy retreat did not enter relaxation.");
-                        typeof(EnemyBrain).GetMethod("BeginWindup", flags).Invoke(enemy, new object[] { true });
+                        enemy.transform.position = player.transform.position + Vector3.forward * 1.5f;
+                        typeof(EnemyBrain).GetMethod("UpdateRestStance", flags).Invoke(enemy, new object[] { 1.5f });
+                        if (enemy.Guard.State.Relaxing)
+                            throw new InvalidOperationException("Enemy stayed relaxed next to its opponent.");
+                        typeof(EnemyBrain).GetMethod("BeginWindup", flags).Invoke(enemy, new object[] { true, false });
                         float enemyWindup = (float)typeof(EnemyBrain).GetField("windup", flags).GetValue(enemy);
                         float actualEnemyWindup = (float)typeof(EnemyBrain).GetProperty("CurrentWindup", flags).GetValue(enemy);
                         if (enemy.Guard.State.Relaxing || Mathf.Abs(actualEnemyWindup - enemyWindup * 2) > .001f)
@@ -885,10 +890,11 @@ namespace Parry.Editor
 
         static void Validate(ArenaDemo arena)
         {
+            bool hasRooms = arena.GetComponent<RoomEncounter>() != null;
             if (arena.GetComponentsInChildren<PlayerMotor>().Length != 1
-                || arena.GetComponentsInChildren<EnemyBrain>().Length != 4
-                || arena.GetComponentsInChildren<PracticeTarget>().Length != 9
-                || arena.GetComponentsInChildren<BoxCollider>().Length != 7)
+                || arena.GetComponentsInChildren<EnemyBrain>().Length != (hasRooms ? 3 : 4)
+                || arena.GetComponentsInChildren<PracticeTarget>().Length != (hasRooms ? 3 : 9)
+                || arena.GetComponentsInChildren<BoxCollider>().Length != (hasRooms ? 16 : 7))
                 throw new InvalidOperationException("Unexpected baked arena object counts.");
             foreach (var renderer in arena.GetComponentsInChildren<SpriteRenderer>())
                 if (renderer.GetComponent<WeaponVisual>() == null

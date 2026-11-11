@@ -3,6 +3,7 @@ using System.Collections.Generic;
 
 namespace Parry
 {
+    [SelectionBase]
     [RequireComponent(typeof(PracticeTarget), typeof(CombatGuard))]
     public sealed class EnemyBrain : MonoBehaviour
     {
@@ -19,6 +20,7 @@ namespace Parry
         [SerializeField] float stunDuration = .23f;
         [Header("Attack")]
         [SerializeField] float windup = .24f;
+        [SerializeField, Min(0)] float swordStepDistance = .3f;
         [SerializeField] float recovery = .5f;
         [SerializeField] float attackInterval = .65f;
         [SerializeField] float reach = 2.5f;
@@ -35,16 +37,26 @@ namespace Parry
         [SerializeField, Min(.1f)] float retreatDecisionInterval = 1f;
         [SerializeField] float retreatSpeed = 9f;
         [SerializeField] float safeDistance = 5.2f;
+        [SerializeField, Min(.1f)] float maximumRecoveryAttempt = 5f;
+        [SerializeField, Min(.1f)] float forcedCombatDuration = 3f;
         [SerializeField] float aggressiveSpeedMultiplier = 1.25f;
         [Header("Powerful lunge")]
         [SerializeField, Min(.1f)] float lungeWindup = .9f;
         [SerializeField, Min(.05f)] float lungeActiveTime = .12f;
         [SerializeField, Min(.1f)] float lungeRecovery = .65f;
-        [SerializeField, Min(0)] float lungeDistance = 1.4f;
-        [SerializeField, Min(0)] float lungePressure = 195f;
+        [SerializeField, Min(0)] float lungeDistance = 1.8f;
+        [SerializeField, Min(0)] float lungePressure = 390f;
         [SerializeField, Min(1)] float lungeCooldown = 5f;
         [SerializeField, Range(0, 1)] float lungeChance = .35f;
         bool performingLunge, lungeHit;
+        [Header("Lunge defense")]
+        [SerializeField, Range(0, 1)] float lungeDodgeChance = .8f;
+        [SerializeField, Range(0, 1)] float caughtDodgeParryChance = .2f;
+        [SerializeField, Range(0, 1)] float caughtDodgeBlockChance = .3f;
+        bool lungeResponsePrepared, plannedLungeDodge, dodgingLunge, lungeParryCommitted;
+        Vector3 plannedLungeDirection;
+        int lungeReleaseFrame = -1;
+        public bool PreparingLungeDodge => lungeResponsePrepared && plannedLungeDodge;
         float nextLungeAt, lungeElapsed;
         [Header("Tactical rolls")]
         [SerializeField] float rollSpeed = 14f;
@@ -56,6 +68,11 @@ namespace Parry
 
         [Header("Group tactics")]
         [SerializeField, Min(1)] float coordinationRadius = 8f;
+        [SerializeField, Min(.1f)] float surroundWait = .35f;
+        [SerializeField, Min(.1f)] float allyProtectionDuration = 1.2f;
+        float protectAllyUntil;
+        bool ProtectingAlly => Time.time < protectAllyUntil && !tactics.Retreating && !Guard.Disrupted;
+        float groupWaitingSince = float.NegativeInfinity;
         static readonly List<EnemyBrain> activeEnemies = new List<EnemyBrain>();
         void OnEnable() { activeEnemies.Add(this); }
         void OnDisable() { activeEnemies.Remove(this); }
@@ -69,6 +86,9 @@ namespace Parry
         bool TargetThreatening => opponent != null ? opponent.AttackThreatening : player != null && player.AttackThreatening;
         float TargetReach => opponent != null ? opponent.ThreatReach : player != null ? player.ThreatReach : 0;
         bool TargetUnblockable => opponent != null ? opponent.UnblockableAttack : player != null && player.UnblockableAttack && player.AttackThreatening;
+        bool TargetPreparingLunge => opponent != null ? opponent.PowerfulThreat && !opponent.UnblockableAttack
+            : player != null && player.PreparingPowerfulAttack;
+        Vector3 TargetAttackHeading => opponent != null ? opponent.AttackFacing : player.AttackFacing;
         CombatGuard TargetGuard => opponent != null ? opponent.Guard : player.Guard;
         public AttackPhase ClashPhase => !health.IsAlive ? AttackPhase.None
             : state == State.Lunge ? AttackPhase.Active
@@ -78,6 +98,7 @@ namespace Parry
         public Vector3 AttackFacing => facing;
         public void InterruptAttack()
         {
+            slashSequence.Reset();
             Guard.State.CompleteStrongAttack(Time.time);
             performingLunge = false;
             state = State.Recovery;
@@ -97,6 +118,7 @@ namespace Parry
             CombatHitbox hitbox = opponent != null ? opponent.Health.Hitbox : player != null ? player.Hitbox : null;
             if (hitbox == null || !hitbox.IntersectsAttack(transform.position + Vector3.up * .8f,
                 facing, AttackReach, performingLunge ? 20 : halfAngle, CircularAttacks && !performingLunge)) return false;
+            if (!performingLunge) Guard.State.RecordOrdinaryContact();
             if (opponent != null) opponent.ReceiveAttack(amount, direction, Guard, performingLunge);
             else if (player != null) player.ReceiveAttack(amount, direction, Guard, performingLunge);
             return true;
@@ -110,6 +132,9 @@ namespace Parry
         bool wasAlive = true;
         bool observedPlayerAttack;
         readonly EnemyTactics tactics = new EnemyTactics(() => Random.value);
+        readonly HashSet<EnemyBrain> stepReactedEnemies = new HashSet<EnemyBrain>();
+        float stepRecoilUntil;
+        readonly SlashSequence slashSequence = new SlashSequence();
         int comboRemaining;
         float retreatSide = 1, nextSideChange;
         float lastSwingAt = float.NegativeInfinity;
@@ -122,6 +147,7 @@ namespace Parry
         public float RollProgress => 1 - Mathf.Clamp01(rollRemaining / Mathf.Max(.001f, rollDuration));
         public string TacticalStatus => !health.IsAlive ? "DEFEATED" : Guard.Disrupted ? "STAGGERED"
             : Rolling ? (closingRoll ? "CLOSING" : "ESCAPING")
+            : lungeResponsePrepared ? (plannedLungeDodge ? "DODGE READY" : "PARRY READY")
             : Guard.State.Relaxing ? "RELAXING" : tactics.Retreating ? "RECOVERING" : tactics.FullOffense ? "FULL OFFENSE" : tactics.Aggressive ? "PRESSING" : "CAUTIOUS";
         public CombatGuard Guard { get; private set; }
         public PracticeTarget Health => health;
@@ -158,8 +184,6 @@ namespace Parry
             Guard = GetComponent<CombatGuard>();
             Guard.State.ConfigureEndurance(endurance);
             visual = GetComponentInChildren<SpriteRenderer>();
-            CharacterPresentation.Install(gameObject, visual, true);
-            health.SetBodyColor(Color.white);
             warning = DemoArt.Line("Enemy attack warning", transform, new Color(1, .23f, .18f), .07f);
             warning.enabled = false;
             shadow = transform.Find("Ground shadow");
@@ -173,13 +197,16 @@ namespace Parry
             if (shadow != null) shadow.gameObject.SetActive(health.IsAlive);
             if (!health.IsAlive)
             {
+                lungeResponsePrepared = dodgingLunge = lungeParryCommitted = false;
                 Guard.State.CompleteStrongAttack(Time.time);
                 performingLunge = false;
                 wasAlive = false;
                 observedPlayerAttack = false;
                 nextAttackAt = 0;
                 nextRollAt = rollRemaining = 0;
+                slashSequence.Reset();
                 tactics.Reset();
+                protectAllyUntil = 0;
                 comboRemaining = 0;
                 state = State.Chase;
                 Guard.Tick(false, facing);
@@ -188,26 +215,32 @@ namespace Parry
             if (!wasAlive)
             {
                 wasAlive = true;
+                stepRecoilUntil = 0;
                 Guard.ResetCombat();
                 attackWindupMultiplier = 1;
+                slashSequence.Reset();
                 tactics.Reset();
+                protectAllyUntil = 0;
                 comboRemaining = 0;
                 state = State.Recovery;
                 stateUntil = Time.time + .8f;
             }
             if (!TargetAlive)
             {
+                lungeResponsePrepared = dodgingLunge = lungeParryCommitted = false;
                 Guard.State.CompleteStrongAttack(Time.time);
                 performingLunge = false;
                 state = State.Chase;
                 comboRemaining = 0;
                 observedPlayerAttack = false;
+                slashSequence.Reset();
                 tactics.Reset();
                 Guard.Tick(false, facing);
                 return;
             }
             if (health.LastHitTime > observedHitTime)
             {
+                slashSequence.Reset();
                 Guard.State.CompleteStrongAttack(Time.time);
                 performingLunge = false;
                 observedHitTime = health.LastHitTime;
@@ -216,6 +249,12 @@ namespace Parry
                 stateUntil = Time.time + stunDuration;
             }
             Vector3 delta = Vector3.ProjectOnPlane(TargetTransform.position - transform.position, Vector3.up);
+            UpdateRestStance(delta.magnitude);
+            if (Time.time < stepRecoilUntil && (state == State.Chase || state == State.Guard || state == State.Retreat))
+            {
+                Guard.Tick(CanGuard && !Guard.State.Relaxing, facing);
+                return;
+            }
             if (state == State.Lunge)
             {
                 Guard.Tick(false, facing);
@@ -226,6 +265,7 @@ namespace Parry
             if (Rolling)
             {
                 Guard.Tick(false, facing);
+                if (lungeReleaseFrame == Time.frameCount) return;
                 float elapsed = Mathf.Min(Time.deltaTime, rollRemaining);
                 bool moved = health.Move(rollDirection * currentRollSpeed * elapsed);
                 rollRemaining = Mathf.Max(0, rollRemaining - elapsed);
@@ -237,14 +277,32 @@ namespace Parry
                 }
                 return;
             }
+            if (!TargetPreparingLunge && !TargetUnblockable) lungeResponsePrepared = lungeParryCommitted = false;
+            if (TargetPreparingLunge && delta.magnitude <= TargetReach + lungeDistance + 1 && HasLineOfSight(delta)
+                && (lungeResponsePrepared || Vector3.Angle(TargetAttackHeading, -delta) <= 60)
+                && !Guard.Disrupted && state != State.Lunge && (state != State.Recovery || Time.time >= stateUntil))
+            {
+                if (!lungeResponsePrepared) PrepareLungeResponse(TargetAttackHeading);
+                facing = delta.normalized;
+                Guard.Tick(false, facing);
+                return;
+            }
             if (delta.sqrMagnitude > .001f && (state == State.Chase || state == State.Retreat)) facing = delta.normalized;
             if (delta.sqrMagnitude > .001f && state == State.Guard)
                 facing = Vector3.RotateTowards(facing, delta.normalized, 4 * Time.deltaTime, 0);
             UpdateTactics(delta);
             bool newAttack = TargetThreatening && !observedPlayerAttack;
             observedPlayerAttack = TargetThreatening;
-            if (TargetUnblockable && delta.magnitude <= TargetReach + .5f && HasLineOfSight(delta)
-                && TryDodgeLunge(delta)) return;
+            if (TargetUnblockable && lungeResponsePrepared)
+            {
+                ReactToLungeRelease(TargetGuard, TargetAttackHeading);
+                if (Rolling) return;
+            }
+            if (TargetUnblockable && lungeParryCommitted)
+            {
+                Guard.Tick(CanGuard, facing);
+                return;
+            }
             if (!tactics.ExploitingWeakness && !TargetUnblockable && state != State.Windup && TargetThreatening
                 && delta.magnitude <= TargetReach + .3f && HasLineOfSight(delta))
                 PrepareDefense(delta, newAttack);
@@ -252,6 +310,7 @@ namespace Parry
                 && (state != State.Recovery || Time.time >= stateUntil), facing);
             if (Guard.Disrupted)
             {
+                slashSequence.Reset();
                 Guard.State.CompleteStrongAttack(Time.time);
                 performingLunge = false;
                 state = State.Recovery;
@@ -260,7 +319,11 @@ namespace Parry
                 return;
             }
             if (TryCornerRoll(delta)) return;
-            if (TryFlankPlayer(delta)) return;
+            bool alreadyWindingUp = state == State.Windup;
+            bool waitingForGroup = !ProtectingAlly && TryGroupAttack();
+            if (!alreadyWindingUp && state == State.Windup) { DrawWarning(); return; }
+            if (!ProtectingAlly && TryFlankPlayer(delta)) return;
+            if (waitingForGroup) return;
             if (TryApproachRoll(delta)) return;
             if (tactics.Retreating && state != State.Retreat && (state != State.Windup || tactics.UrgentRetreat && !performingLunge)
                 && (state != State.Recovery || Time.time >= stateUntil)) BeginRetreat();
@@ -303,6 +366,13 @@ namespace Parry
             else if (state == State.Windup)
             {
                 DrawWarning();
+                if (!performingLunge)
+                {
+                    float previousElapsed = CurrentWindup - (stateUntil - (Time.time - Time.deltaTime));
+                    float step = SwordStep.Distance(previousElapsed, Time.deltaTime, CurrentWindup, swordStepDistance);
+                    if (step > 0) MoveAttackStep(step, false);
+                    delta = Vector3.ProjectOnPlane(TargetTransform.position - transform.position, Vector3.up);
+                }
                 if (Time.time >= stateUntil)
                 {
                     if (performingLunge)
@@ -313,6 +383,7 @@ namespace Parry
                         lastSwingAt = Time.time;
                         nextAttackAt = Time.time + lungeActiveTime + lungeRecovery;
                         Guard.AnnounceAttack(0, AttackReach + lungeDistance);
+                        NotifyLungeRelease(Guard, facing);
                         CombatAudio.Play(CombatSound.Swing, transform.position);
                         AdvanceLunge(Mathf.Min(Time.deltaTime, lungeActiveTime));
                         return;
@@ -329,6 +400,7 @@ namespace Parry
             }
             else if (Time.time >= stateUntil)
             {
+                slashSequence.Finish(stateUntil);
                 performingLunge = false;
                 if (TargetThreatening && !tactics.FullOffense) BeginGuard();
                 else if (tactics.Aggressive && delta.magnitude <= AttackReach && HasLineOfSight(delta))
@@ -343,13 +415,33 @@ namespace Parry
         void UpdateTactics(Vector3 delta)
         {
             bool seesTarget = HasLineOfSight(delta);
-            bool threatened = TargetThreatening && delta.magnitude <= TargetReach + .5f && seesTarget;
+            bool threatened = TargetThreatening && delta.magnitude <= TargetReach + .5f && seesTarget
+                && (player == null || opponent != null || Vector3.Angle(player.AttackFacing, -delta) <= player.ThreatHalfAngle + 10);
             bool opening = TargetGuard.Disrupted && delta.magnitude <= AttackReach && seesTarget;
+            if (player != null && opponent == null && player.AttackThreatening && seesTarget)
+            {
+                foreach (var ally in activeEnemies)
+                {
+                    if (ally == this || ally == null || ally.health == null || !ally.health.IsAlive
+                        || ally.player != player || ally.opponent != null || ally.arena != arena) continue;
+                    Vector3 toAlly = Vector3.ProjectOnPlane(ally.transform.position - transform.position, Vector3.up);
+                    Vector3 attackDelta = Vector3.ProjectOnPlane(ally.transform.position - player.transform.position, Vector3.up);
+                    if (toAlly.sqrMagnitude > coordinationRadius * coordinationRadius
+                        || attackDelta.magnitude > player.ThreatReach + .35f
+                        || Vector3.Angle(player.AttackFacing, attackDelta) > player.ThreatHalfAngle + 10
+                        || !HasLineOfSight(toAlly) || !ally.HasLineOfSight(-attackDelta)) continue;
+                    protectAllyUntil = Time.time + allyProtectionDuration;
+                    break;
+                }
+            }
             tactics.Update(Guard.Pressure, Time.time, Guard.EndurancePoints, threatened, opening,
-                seesTarget ? TargetGuard.Pressure : 0, seesTarget && TargetGuard.Disrupted, retreatDecisionInterval);
+                seesTarget ? TargetGuard.Pressure : 0, seesTarget && TargetGuard.Disrupted, retreatDecisionInterval, Time.time < protectAllyUntil,
+                Guard.State.Relaxing && !threatened
+                    && EnemyTactics.CanRelaxAtDistance(delta.magnitude, safeDistance, TargetReach, true),
+                maximumRecoveryAttempt, forcedCombatDuration);
         }
 
-        void BeginWindup(bool newCombo)
+        void BeginWindup(bool newCombo, bool groupAttack = false)
         {
             float attackReadyAt = Mathf.Max(nextAttackAt, tactics.AttackBlockedUntil);
             if (Time.time < attackReadyAt)
@@ -359,7 +451,7 @@ namespace Parry
                 return;
             }
             Vector3 targetDelta = Vector3.ProjectOnPlane(TargetTransform.position - transform.position, Vector3.up);
-            performingLunge = newCombo && CanConsiderLunge(targetDelta) && Random.value < lungeChance;
+            performingLunge = !groupAttack && newCombo && CanConsiderLunge(targetDelta) && Random.value < lungeChance;
             if (!performingLunge && targetDelta.magnitude > AttackReach) { state = State.Chase; return; }
             attackWindupMultiplier = Guard.State.ExitRelaxationForAttack();
             if (!performingLunge && !Guard.State.TrySpendForAttack(attackPressure, Time.time))
@@ -367,6 +459,8 @@ namespace Parry
                 BeginGuard();
                 return;
             }
+            stepReactedEnemies.Clear();
+            slashSequence.Begin(Time.time, !performingLunge);
             state = State.Windup;
             stateUntil = Time.time + CurrentWindup;
             if (!performingLunge) Guard.AnnounceAttack(CurrentWindup, AttackReach);
@@ -378,10 +472,38 @@ namespace Parry
             Guard.State.SetBlocking(false, Time.time);
         }
 
-        bool CanConsiderLunge(Vector3 delta) => Time.time >= nextLungeAt && !TargetThreatening
+        bool CanConsiderLunge(Vector3 delta) => Guard.State.StrongAttackReady && Time.time >= nextLungeAt && !TargetThreatening
             && delta.magnitude >= 1.2f && delta.magnitude <= AttackReach + lungeDistance * .8f
             && (Guard.RemainingEndurance > lungePressure || tactics.FullOffense)
             && !tactics.Retreating && HasLineOfSight(delta);
+
+        void MoveAttackStep(float distance, bool powerful)
+        {
+            Vector3 start = transform.position;
+            health.Move(facing * distance);
+            ReactToAttackStep(transform, start, transform.position - start, powerful, stepReactedEnemies);
+        }
+
+        public static void ReactToAttackStep(Transform attacker, Vector3 start, Vector3 advance,
+            bool powerful, HashSet<EnemyBrain> reacted)
+        {
+            advance = Vector3.ProjectOnPlane(advance, Vector3.up);
+            float travel = advance.magnitude;
+            if (travel <= .001f) return;
+            foreach (var enemy in activeEnemies)
+            {
+                if (enemy == null || enemy.health == null || !enemy.health.IsAlive || enemy.Rolling
+                    || enemy.TargetTransform != attacker || reacted.Contains(enemy)) continue;
+                Vector3 away = Vector3.ProjectOnPlane(enemy.transform.position - start, Vector3.up);
+                if (!SwordStep.ProvokesRecoil(away.magnitude, Vector3.Dot(advance.normalized, away.normalized), travel)) continue;
+                if (Physics.Raycast(start + Vector3.up * .65f, away.normalized, away.magnitude,
+                    ~0, QueryTriggerInteraction.Ignore)) continue;
+                reacted.Add(enemy);
+                enemy.health.Nudge(away, powerful ? 3 : 2);
+                enemy.Guard.State.LeaveRelaxation();
+                enemy.stepRecoilUntil = Time.time + (powerful ? .2f : .12f);
+            }
+        }
 
         void AdvanceLunge(float dt)
         {
@@ -390,7 +512,7 @@ namespace Parry
             int steps = Mathf.Max(1, Mathf.CeilToInt(lungeDistance * elapsed / lungeActiveTime / .15f));
             for (int i = 0; i < steps && state == State.Lunge && !Guard.Disrupted; i++)
             {
-                health.Move(facing * (lungeDistance * elapsed / lungeActiveTime / steps));
+                MoveAttackStep(lungeDistance * elapsed / lungeActiveTime / steps, true);
                 if (!lungeHit && HasLineOfSight(TargetTransform.position - transform.position))
                     lungeHit = AttackTarget(damage, facing);
             }
@@ -404,14 +526,62 @@ namespace Parry
             }
         }
 
-        bool TryDodgeLunge(Vector3 delta)
+        void PrepareLungeResponse(Vector3 heading)
         {
-            if (!CanStartRoll) return false;
-            Vector3 lateral = Vector3.Cross(Vector3.up, delta.normalized);
+            lungeResponsePrepared = true;
+            plannedLungeDodge = false;
+            Guard.State.CompleteStrongAttack(Time.time);
+            performingLunge = false;
+            state = State.Guard;
+            lastSwingAt = float.NegativeInfinity;
+            comboRemaining = 0;
+            warning.enabled = false;
+            if (!CanStartRoll || Random.value >= lungeDodgeChance) return;
+            Vector3 forward = Vector3.ProjectOnPlane(heading, Vector3.up).normalized;
+            Vector3 lateral = Vector3.Cross(Vector3.up, forward);
+            Vector3[] directions = { lateral, -lateral, forward };
+            int first = Random.Range(0, directions.Length);
             float distance = rollSpeed * rollDuration;
-            foreach (Vector3 direction in new[] { lateral, -lateral, -delta.normalized })
-                if (health.CanMove(direction * distance) && BeginRoll(direction, distance, false)) return true;
-            return false;
+            for (int i = 0; i < directions.Length; i++)
+            {
+                Vector3 direction = directions[(first + i) % directions.Length];
+                if (!health.CanMove(direction * distance)) continue;
+                plannedLungeDodge = true;
+                plannedLungeDirection = direction;
+                break;
+            }
+        }
+
+        public static void NotifyLungeRelease(CombatGuard attacker, Vector3 heading)
+        {
+            foreach (var enemy in new List<EnemyBrain>(activeEnemies))
+                enemy.ReactToLungeRelease(attacker, heading);
+        }
+
+        public void ReactToLungeRelease(CombatGuard attacker, Vector3 heading)
+        {
+            if (attacker == null || !health.IsAlive || !TargetAlive || TargetGuard != attacker
+                || Rolling || Guard.Disrupted || state == State.Lunge || lungeReleaseFrame == Time.frameCount) return;
+            Vector3 delta = TargetTransform.position - transform.position;
+            if (delta.magnitude > TargetReach + 1 || !HasLineOfSight(delta)) return;
+            lungeReleaseFrame = Time.frameCount;
+            bool evade = lungeResponsePrepared && plannedLungeDodge;
+            lungeResponsePrepared = false;
+            lungeParryCommitted = false;
+            if (evade && health.CanMove(plannedLungeDirection * rollSpeed * rollDuration)
+                && BeginRoll(plannedLungeDirection, rollSpeed * rollDuration, false))
+            {
+                dodgingLunge = true;
+                Guard.Tick(false, facing);
+                // Advance the first roll slice before the earlier-running attacker tests its blade.
+                float elapsed = Mathf.Min(Time.deltaTime, rollRemaining);
+                health.Move(rollDirection * currentRollSpeed * elapsed);
+                rollRemaining -= elapsed;
+                return;
+            }
+            lungeParryCommitted = true;
+            PrepareDefense(delta, true);
+            Guard.Tick(CanGuard, facing);
         }
 
         bool TryCornerRoll(Vector3 delta)
@@ -483,7 +653,9 @@ namespace Parry
         {
             if (!CanStartRoll) return false;
             if (!Guard.State.TrySpendForRoll(rollPressure, Time.time)) return false;
+            slashSequence.Reset();
             state = State.Roll;
+            dodgingLunge = false;
             rollDirection = direction;
             currentRollSpeed = distance / rollDuration;
             closingRoll = closing;
@@ -514,6 +686,7 @@ namespace Parry
             if (newAttack) Guard.State.SetBlocking(false, Time.time);
             if (emergency)
             {
+                slashSequence.Reset();
                 Guard.State.TryEmergencyGuard(emergencyGuardPressure, Time.time);
                 state = State.Guard;
                 stateUntil = Time.time + GuardWait;
@@ -530,12 +703,26 @@ namespace Parry
         {
             if (!health.IsAlive) return;
             if (Guard.TryClash(attacker, direction, unblockable)) return;
+            bool caughtLungeDodge = unblockable && Rolling && dodgingLunge;
+            LungeDodgeDefense caught = caughtLungeDodge
+                ? LungeDefenseRules.Caught(Random.value, caughtDodgeParryChance, caughtDodgeBlockChance)
+                : LungeDodgeDefense.Hit;
             bool newAttack = TargetThreatening && !observedPlayerAttack;
             if (TargetThreatening) observedPlayerAttack = true;
-            PrepareDefense(-direction, newAttack);
-            DefenseResult defense = Guard.Defend(attacker, direction, Random.value < parryChance, unblockable);
+            if (caughtLungeDodge)
+            {
+                facing = -direction;
+                Guard.SetFacing(facing);
+                Guard.State.SetBlocking(false, Time.time);
+                Guard.State.SetBlocking(caught != LungeDodgeDefense.Hit, Time.time);
+            }
+            else if (unblockable && lungeParryCommitted) Guard.SetFacing(-direction);
+            else PrepareDefense(-direction, newAttack);
+            DefenseResult defense = Guard.Defend(attacker, direction,
+                caughtLungeDodge ? caught == LungeDodgeDefense.Parry : unblockable && lungeParryCommitted || Random.value < parryChance, unblockable);
             if (defense != DefenseResult.Hit)
             {
+                slashSequence.Reset();
                 comboRemaining = 0;
                 if (defense == DefenseResult.Parry)
                 {
@@ -577,7 +764,7 @@ namespace Parry
             float returnToReady = Mathf.Clamp01((Time.time - lastSwingAt - CurrentActive) / Mathf.Max(.01f, recoveryDuration - CurrentActive));
             weapon.Pose(facing, health.IsAlive && !Rolling, Guard.Blocking, Guard.Disrupted, swing, prepare,
                 AttackReach, performingLunge ? 20 : halfAngle, returnToReady, CircularAttacks && !performingLunge,
-                lunge: performingLunge, powerful: performingLunge, thrustStance: performingLunge, relaxing: Guard.State.Relaxing);
+                lunge: performingLunge, powerful: performingLunge, thrustStance: performingLunge, relaxing: Guard.State.Relaxing, slashDirection: slashSequence.Direction);
             weapon.ChargeGlint(prepare, performingLunge && state == State.Windup);
             if (!health.IsAlive || visual == null) return;
             Camera camera = Camera.main;
@@ -592,7 +779,7 @@ namespace Parry
                 : state == State.Windup ? new Vector3(1.15f, .9f, 1) : Vector3.one;
             visual.transform.rotation = camera.transform.rotation * (Rolling
                 ? Quaternion.Euler(0, 0, -360 * (1 - rollRemaining / rollDuration))
-                : Quaternion.Euler(0, side * 18, side * (tension * 13 - thrust * 15)));
+                : Quaternion.Euler(0, side * 18, side * slashSequence.Direction * (tension * 13 - thrust * 15)));
         }
 
         bool HasLineOfSight(Vector3 delta)
@@ -600,6 +787,81 @@ namespace Parry
             if (SmokeCloud.Obscures(transform.position, transform.position + delta)) return false;
             return !Physics.Raycast(transform.position + Vector3.up * .65f, delta.normalized, out RaycastHit hit,
                 delta.magnitude, ~0, QueryTriggerInteraction.Ignore) || hit.collider.transform.IsChildOf(TargetTransform);
+        }
+
+        bool NearbyAlly(EnemyBrain ally)
+        {
+            return ally != null && ally.health != null && ally.health.IsAlive
+                && ally.player == player && ally.opponent == null && ally.arena == arena
+                && !ally.Guard.Disrupted && !ally.tactics.Retreating
+                && Vector3.ProjectOnPlane(ally.transform.position - player.transform.position, Vector3.up).sqrMagnitude
+                    <= coordinationRadius * coordinationRadius
+                && ally.HasLineOfSight(player.transform.position - ally.transform.position);
+        }
+
+        bool ReadyForGroupAttack()
+        {
+            return (state == State.Chase || state == State.Guard || state == State.Recovery && Time.time >= stateUntil)
+                && Time.time >= Mathf.Max(nextAttackAt, tactics.AttackBlockedUntil)
+                && Guard.State.CanAttack(Time.time) && Guard.State.CanSpendForRoll(attackPressure, Time.time)
+                && Time.time >= stepRecoilUntil
+                && (!player.AttackThreatening || tactics.ExploitingWeakness
+                    || Vector3.Angle(player.AttackFacing, transform.position - player.transform.position) > player.ThreatHalfAngle + 10)
+                && Vector3.ProjectOnPlane(player.transform.position - transform.position, Vector3.up).magnitude <= AttackDistance;
+        }
+
+        bool TryGroupAttack()
+        {
+            if (opponent != null || player == null || !NearbyAlly(this)) return false;
+            var allies = new List<EnemyBrain>();
+            foreach (var ally in activeEnemies)
+                if (NearbyAlly(ally)) allies.Add(ally);
+            if (allies.Count < 2) { groupWaitingSince = float.NegativeInfinity; return false; }
+            EnemyBrain leader = allies[0];
+            int ready = 0;
+            foreach (var ally in allies) if (ally.ReadyForGroupAttack()) ready++;
+            if (ready == 0) { leader.groupWaitingSince = float.NegativeInfinity; return false; }
+            if (float.IsNegativeInfinity(leader.groupWaitingSince)) leader.groupWaitingSince = Time.time;
+            bool expired = Time.time - leader.groupWaitingSince >= surroundWait;
+            bool allyAttacking = false;
+            foreach (var ally in allies)
+                if (ally != this && (ally.state == State.Windup || ally.state == State.Lunge)) allyAttacking = true;
+            Vector3 towardPlayer = Vector3.ProjectOnPlane(player.transform.position - transform.position, Vector3.up);
+            bool distracted = player.AttackThreatening
+                && Vector3.Angle(player.AttackFacing, -towardPlayer) > player.ThreatHalfAngle + 10;
+            if (ReadyForGroupAttack() && EnemyFlankingRules.AttackIndependently(ready, TargetGuard.Disrupted, allyAttacking, distracted))
+            {
+                // Take a real opening without waiting for an encirclement or another fighter's cooldown.
+                BeginWindup(true, true);
+                leader.groupWaitingSince = float.NegativeInfinity;
+                return false;
+            }
+            bool spread = true;
+            for (int i = 0; i < allies.Count; i++)
+            for (int j = i + 1; j < allies.Count; j++)
+                if (Vector3.Angle(allies[i].transform.position - player.transform.position,
+                    allies[j].transform.position - player.transform.position) < Mathf.Min(70, 240f / allies.Count))
+                    spread = false;
+            if (EnemyFlankingRules.LaunchTogether(allies.Count, ready, spread, expired))
+            {
+                var attackers = new List<EnemyBrain>();
+                float strikeAt = Time.time;
+                foreach (var ally in allies)
+                    if (ally.ReadyForGroupAttack())
+                    {
+                        ally.BeginWindup(true, true);
+                        if (ally.state == State.Windup)
+                        {
+                            attackers.Add(ally);
+                            strikeAt = Mathf.Max(strikeAt, ally.stateUntil);
+                        }
+                    }
+                // Match impact times even when leaving relaxation gives different windup lengths.
+                foreach (var ally in attackers) ally.stateUntil = strikeAt;
+                leader.groupWaitingSince = float.NegativeInfinity;
+                return false;
+            }
+            return !expired && ReadyForGroupAttack();
         }
 
         bool TryFlankPlayer(Vector3 delta)
@@ -613,15 +875,14 @@ namespace Parry
             EnemyBrain anchor = null;
             foreach (var ally in activeEnemies)
             {
-                if (ally == null || ally.health == null || !ally.health.IsAlive
-                    || ally.player != player || ally.opponent != null || ally.arena != arena
-                    || Vector3.ProjectOnPlane(ally.transform.position - player.transform.position, Vector3.up).sqrMagnitude
-                        > coordinationRadius * coordinationRadius) continue;
+                if (!NearbyAlly(ally)) continue;
                 if (anchor == null) anchor = ally;
                 if (ally == this) rank = count;
                 count++;
             }
             if (count < 2) return false;
+            // A fighter already in striking range must never circle instead of taking its attack.
+            if (ReadyForGroupAttack()) return false;
             Vector3 outward = -delta.normalized;
             Vector3 anchorOutward = Vector3.ProjectOnPlane(anchor.transform.position - player.transform.position, Vector3.up);
             if (anchorOutward.sqrMagnitude < .01f) anchorOutward = Vector3.forward;
@@ -656,8 +917,16 @@ namespace Parry
             comboRemaining = 0;
             retreatSide = -retreatSide;
             nextSideChange = Time.time + .7f;
-            Guard.State.BeginRelaxation(Time.time);
+            float distance = Vector3.ProjectOnPlane(TargetTransform.position - transform.position, Vector3.up).magnitude;
+            UpdateRestStance(distance);
+        }
 
+        void UpdateRestStance(float distance)
+        {
+            bool allowed = state == State.Retreat
+                && EnemyTactics.CanRelaxAtDistance(distance, safeDistance, TargetReach, Guard.State.Relaxing);
+            if (!allowed) Guard.State.LeaveRelaxation();
+            else if (!Guard.State.Relaxing) Guard.State.BeginRelaxation(Time.time);
         }
 
         void Retreat(Vector3 delta)

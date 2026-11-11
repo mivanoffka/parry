@@ -38,14 +38,18 @@ namespace Parry.Editor
                 Physics.SyncTransforms();
                 Set(enemy, "lungeChance", 1f); Set(enemy, "nextAttackAt", 0f); Set(enemy, "nextLungeAt", 0f);
                 ((EnemyTactics)typeof(EnemyBrain).GetField("tactics", Flags).GetValue(enemy)).Reengage(0, Time.time);
-                Call(enemy, "BeginWindup", true);
+                Require(!(bool)Call(enemy, "CanConsiderLunge", player.transform.position - enemy.transform.position),
+                    "Enemy must not open combat with an uncharged lunge");
+                for (int i = 0; i < 3; i++) enemy.Guard.State.RecordOrdinaryContact();
+                Call(enemy, "BeginWindup", true, false);
                 Require(enemy.PowerfulThreat && !enemy.UnblockableAttack && !enemy.AttackThreatening, "Preparation must be a lunge, without an active threat");
                 Require((float)typeof(EnemyBrain).GetProperty("CurrentWindup", Flags).GetValue(enemy) >= .9f, "Lunge windup too fast");
                 Require(Mathf.Abs(enemy.Guard.RemainingEndurance - 500) < .01f, "Lunge cost must wait until release");
                 int hp = player.Health;
                 Set(enemy, "stateUntil", Time.time - .01f);
                 Call(enemy, "Update");
-                Require(enemy.Guard.RemainingEndurance <= 305.01f, "Lunge must spend 195 concentration");
+                Require(enemy.Guard.State.StrongAttackCharges == 0, "Lunge must consume its warmup charge at release");
+                Require(enemy.Guard.RemainingEndurance <= 110.01f, "Lunge must spend 390 concentration");
                 if (enemy.UnblockableAttack) Call(enemy, "AdvanceLunge", .12f);
                 Require(player.Health == hp - 1, "Lunge must hit along the forward path");
                 Require(!enemy.UnblockableAttack, "Lunge must end after its active window");
@@ -55,10 +59,11 @@ namespace Parry.Editor
                 Call(enemy, "BeginRetreat");
                 Require(UnityEngine.Object.FindObjectsByType<SmokeGrenade>(FindObjectsSortMode.None).Length == 0, "Enemy must not throw smoke");
                 enemy.Guard.State.Reset(); enemy.InterruptAttack();
+                for (int i = 0; i < 3; i++) enemy.Guard.State.RecordOrdinaryContact();
                 Set(enemy, "nextLungeAt", 0f); Set(enemy, "nextAttackAt", 0f);
                 player.Respawn(); enemy.transform.position = player.transform.position + Vector3.forward * 2.8f;
                 ((EnemyTactics)typeof(EnemyBrain).GetField("tactics", Flags).GetValue(enemy)).Reengage(0, Time.time);
-                Call(enemy, "BeginWindup", true);
+                Call(enemy, "BeginWindup", true, false);
                 Require(enemy.PowerfulThreat, "Second lunge setup failed");
                 enemy.InterruptAttack();
                 Require(!enemy.PowerfulThreat && !enemy.UnblockableAttack, "Interrupted lunge must stop");

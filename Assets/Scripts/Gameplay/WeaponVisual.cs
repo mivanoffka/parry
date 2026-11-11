@@ -114,7 +114,7 @@ namespace Parry
         }
 
         public void Pose(Vector3 facing, bool visible, bool blocking, bool broken, float swing = -1, float windup = 0,
-            float reach = 2.5f, float halfAngle = 35, float recovery = 0, bool circular = false, bool lunge = false, bool powerful = false, bool thrustStance = false, bool relaxing = false)
+            float reach = 2.5f, float halfAngle = 35, float recovery = 0, bool circular = false, bool lunge = false, bool powerful = false, bool thrustStance = false, bool relaxing = false, int slashDirection = 1)
         {
             blade.enabled = visible;
             WindupProgress = windup;
@@ -161,6 +161,7 @@ namespace Parry
                 // Rapid release followed by a slower follow-through, rather than an even sweep.
                 float release = 1 - Mathf.Pow(1 - t, 3);
                 float turn = Mathf.Lerp(-sector - (circular ? 0 : 28), sector + (circular ? 0 : 12), release);
+                if (!lunge) turn *= slashDirection;
                 Vector3 attackDirection = lunge ? facing : Quaternion.AngleAxis(turn, Vector3.up) * facing;
                 float tension = swing < 0 ? 1 : 1 - release;
                 Vector3 drawBack = -facing * (powerful ? .4f : .22f) * tension

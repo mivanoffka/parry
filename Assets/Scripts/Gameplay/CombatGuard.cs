@@ -17,7 +17,7 @@ namespace Parry
         public Vector3 Facing { get; private set; } = Vector3.back;
         float feedbackUntil;
         string feedback;
-        LineRenderer bar, background, flash;
+        LineRenderer bar, background, flash, warmupBar, warmupBackground;
         ParrySparks sparks;
         bool wasBroken;
         CombatGuard lastClashWith;
@@ -78,8 +78,9 @@ namespace Parry
             attacker.lastClashWith = this; attacker.lastClashFrame = Time.frameCount;
             bool parry = clash == AttackClash.Parry;
             bool ownPowerful = Powerful;
-            State.AddPressure(powerful ? 80 : parry ? 45 : 28, Time.time);
-            attacker.State.AddPressure(ownPowerful ? 80 : parry ? 45 : 28, Time.time);
+            if (parry) { State.RecordSuccessfulParry(); attacker.State.RecordSuccessfulParry(); }
+            State.AddPressure(powerful ? State.PowerfulParryCost : parry ? 45 : 28, Time.time);
+            attacker.State.AddPressure(ownPowerful ? attacker.State.PowerfulParryCost : parry ? 45 : 28, Time.time);
             State.Deflect(Time.time); attacker.State.Deflect(Time.time);
             State.Recoil(Time.time); attacker.State.Recoil(Time.time);
             float push = powerful || ownPowerful ? 12 : parry ? 7 : 5;
@@ -150,6 +151,11 @@ namespace Parry
             var player = GetComponent<PlayerMotor>();
             if (player != null) player.Push(direction, speed);
         }
+        public void NotifyWarmupRequired()
+        {
+            feedback = "BUILD WARMUP: ATTACK / PARRY";
+            feedbackUntil = Time.time + 1.2f;
+        }
         public void OnHit() { State.CancelRelaxation(); State.AddPressure(22, Time.time); }
         public void ResetCombat()
         {
@@ -164,6 +170,10 @@ namespace Parry
             background.sortingOrder = 100;
             bar.sortingOrder = 101;
             background.positionCount = bar.positionCount = 2;
+            warmupBackground = DemoArt.Line("Combat warmup background", transform, new Color(.12f, .2f, .23f), .085f);
+            warmupBar = DemoArt.Line("Combat warmup", transform, new Color(.25f, .95f, .9f), .055f);
+            warmupBackground.sortingOrder = 100; warmupBar.sortingOrder = 101;
+            warmupBackground.positionCount = warmupBar.positionCount = 2;
             flash = DemoArt.Line("Weapon clash", transform, ParrySparks.ImpactColor(true), .055f);
             flash.enabled = false;
         }
@@ -192,12 +202,22 @@ namespace Parry
             bool alive = player != null ? player.IsAlive : target != null && target.IsAlive;
             bool markersVisible = alive && SmokeCloud.Exposure(transform.position) <= .01f;
             background.enabled = markersVisible;
+            warmupBackground.enabled = markersVisible;
+            warmupBar.enabled = markersVisible && State.Warmup > 0;
             bar.enabled = markersVisible && Pressure > .001f;
             if (alive)
             {
                 Camera view = Camera.main;
                 Vector3 right = view.transform.right * .55f;
                 Vector3 center = transform.position + Vector3.up * 2.05f;
+                Vector3 warmupCenter = center + Vector3.up * .18f;
+                warmupBackground.SetPosition(0, warmupCenter - right);
+                warmupBackground.SetPosition(1, warmupCenter + right);
+                Vector3 warmupStart = warmupCenter - right - view.transform.forward * .02f;
+                warmupBar.SetPosition(0, warmupStart);
+                warmupBar.SetPosition(1, warmupStart + right * 2 * State.Warmup / PostureState.MaximumWarmup);
+                warmupBar.startColor = warmupBar.endColor = State.StrongAttackReady
+                    ? new Color(.25f, .95f, .9f) : new Color(.3f, .5f, .6f);
                 background.SetPosition(0, center - right); background.SetPosition(1, center + right);
                 Vector3 fillStart = center - right - view.transform.forward * .02f;
                 bar.SetPosition(0, fillStart);

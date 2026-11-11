@@ -27,6 +27,11 @@ namespace Parry
             knockback = Vector3.ProjectOnPlane(direction, Vector3.up).normalized * speed;
         }
 
+        public void Nudge(Vector3 direction, float speed)
+        {
+            if (knockback.magnitude < speed) Push(direction, speed);
+        }
+
         void Awake()
         {
             health = maxHealth;

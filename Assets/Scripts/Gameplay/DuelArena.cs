@@ -4,6 +4,7 @@ using UnityEngine.InputSystem;
 namespace Parry
 {
     // Spectator scene: combat and respawning remain owned by the two existing brains.
+    [DefaultExecutionOrder(-100)]
     public sealed class DuelArena : MonoBehaviour
     {
         [SerializeField] EnemyBrain first;
@@ -13,7 +14,11 @@ namespace Parry
         [Tooltip("Show attack range indicators for both fighters.")]
         [SerializeField] bool showAttackRangeIndicators;
         public bool ShowAttackRangeIndicators { get => showAttackRangeIndicators; set => showAttackRangeIndicators = value; }
-        Vector3 cameraVelocity;
+        Vector3 cameraVelocity, cameraFocus;
+        [Header("Zoom tilt")]
+        [SerializeField, Range(5, 80)] float closeZoomPitch = 28;
+        [SerializeField, Range(5, 80)] float distantZoomPitch = 58;
+        float normalCameraPitch;
         float zoomMultiplier = 1f;
         float zoomVelocity;
         float currentCameraSize;
@@ -23,6 +28,8 @@ namespace Parry
         void Start()
         {
             initialCameraSize = currentCameraSize = view.orthographicSize;
+            normalCameraPitch = view.transform.eulerAngles.x;
+            cameraFocus = (first.transform.position + second.transform.position) * .5f;
             PracticeTarget.ResetCounter();
             CombatAudio.Initialize(transform);
             first.Initialize(second);
@@ -44,15 +51,18 @@ namespace Parry
                     && (Application.platform == RuntimePlatform.WindowsPlayer || Application.platform == RuntimePlatform.WindowsEditor))
                     scroll /= 120f;
                 zoomMultiplier = Mathf.Clamp(zoomMultiplier
-                    - scroll * .075f, .5f, 2f);
+                    - scroll * .0375f, .5f, 2f);
             }
             currentCameraSize = Mathf.SmoothDamp(currentCameraSize,
-                Mathf.Clamp(size * zoomMultiplier, 3f, 20f), ref zoomVelocity, .24f);
-            Vector3 followOffset = cameraOffset;
+                Mathf.Clamp(size * zoomMultiplier, 3f, 20f), ref zoomVelocity, .4f);
+            float pitch = CameraZoom.Pitch(currentCameraSize, initialCameraSize, 20,
+                normalCameraPitch, closeZoomPitch, distantZoomPitch);
+            Quaternion cameraRotation = Quaternion.Euler(pitch, 0, 0);
+            Vector3 followOffset = -(cameraRotation * Vector3.forward) * cameraOffset.magnitude;
             if (view.orthographic) view.orthographicSize = currentCameraSize;
             else followOffset *= currentCameraSize / initialCameraSize;
-            view.transform.position = Vector3.SmoothDamp(view.transform.position,
-                center + followOffset, ref cameraVelocity, .3f);
+            cameraFocus = Vector3.SmoothDamp(cameraFocus, center, ref cameraVelocity, .3f);
+            view.transform.SetPositionAndRotation(cameraFocus + followOffset, cameraRotation);
         }
     }
 }

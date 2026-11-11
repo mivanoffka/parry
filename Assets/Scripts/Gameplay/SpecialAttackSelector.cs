@@ -1,5 +1,53 @@
 namespace Parry
 {
+    public enum LungeDodgeDefense { Hit, Block, Parry }
+    public static class LungeDefenseRules
+    {
+        public static LungeDodgeDefense Caught(float sample, float parryChance, float blockChance)
+        {
+            float parry = System.Math.Clamp(parryChance, 0, 1);
+            float block = System.Math.Clamp(blockChance, 0, 1 - parry);
+            return sample < parry ? LungeDodgeDefense.Parry
+                : sample < parry + block ? LungeDodgeDefense.Block : LungeDodgeDefense.Hit;
+        }
+    }
+
+    public static class SwordStep
+    {
+        public static bool ProvokesRecoil(float distance, float alignment, float advance) =>
+            advance > .001f && distance <= 1.35f + advance && alignment >= .35f;
+        // Step into the cut during the last tenth of a second of its windup.
+        public static float Distance(float elapsed, float deltaTime, float windup, float distance)
+        {
+            float duration = System.Math.Min(.1f, System.Math.Max(0, windup));
+            if (duration <= 0 || deltaTime <= 0) return 0;
+            float start = windup - duration;
+            float overlap = System.Math.Max(0, System.Math.Min(elapsed + deltaTime, windup) - System.Math.Max(elapsed, start));
+            return System.Math.Max(0, distance) * overlap / duration;
+        }
+    }
+
+    public sealed class SlashSequence
+    {
+        public const float ContinuationWindow = .18f;
+        public int Direction { get; private set; } = 1;
+        float finishedAt = float.NegativeInfinity;
+        bool slash;
+        public void Begin(float now, bool isSlash)
+        {
+            Direction = isSlash && now >= finishedAt && now - finishedAt <= ContinuationWindow ? -Direction : 1;
+            finishedAt = float.NegativeInfinity;
+            slash = isSlash;
+        }
+        public void Finish(float now)
+        {
+            if (!slash) return;
+            finishedAt = now;
+            slash = false;
+        }
+        public void Reset() { slash = false; finishedAt = float.NegativeInfinity; Direction = 1; }
+    }
+
     public enum AttackChoice { None, Slash, Lunge, Thrust }
     public enum WeaponStyle { Normal, Thrusting }
 

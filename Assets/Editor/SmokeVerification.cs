@@ -62,7 +62,7 @@ namespace Parry.Editor
                 retreat.Invoke(enemy, null);
                 Require(UnityEngine.Object.FindObjectsByType<SmokeGrenade>(FindObjectsSortMode.None).Length == before,
                     "Enemy smoke ability must remain disabled");
-                Require(enemy.Guard.State.Relaxing, "Enemy must recover in relaxation stance");
+                Require(!enemy.Guard.State.Relaxing, "Enemy must not relax while retreating near its opponent");
                 Debug.Log("PARRY SMOKE PARTICLES, RADIUS, VISIBILITY AND EXPIRATION CHECK PASSED");
                 EditorApplication.Exit(0);
             }
