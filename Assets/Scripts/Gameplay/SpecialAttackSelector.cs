@@ -48,8 +48,18 @@ namespace Parry
         public void Reset() { slash = false; finishedAt = float.NegativeInfinity; Direction = 1; }
     }
 
-    public enum AttackChoice { None, Slash, Lunge, Thrust }
-    public enum WeaponStyle { Normal, Thrusting }
+    public enum AttackChoice { None, Slash, Lunge, Thrust, Sweep }
+    public enum WeaponStyle { Normal, Thrusting, Sweeping }
+
+    public static class PowerfulSweep
+    {
+        public const float HalfAngle = 120;
+        public const float Windup = .9f;
+        public const float ActiveTime = .24f;
+        public const float Recovery = .6f;
+        public const int DamageMultiplier = 2;
+        public static bool IsPowerful(AttackChoice attack) => attack == AttackChoice.Lunge || attack == AttackChoice.Sweep;
+    }
 
     // Each style explicitly declares its three optional actions.
     public readonly struct WeaponStyleOptions
@@ -60,6 +70,7 @@ namespace Parry
         { NormalAttack = normal; StrongAttack = strong; CanGuard = guard; }
         public static WeaponStyleOptions Sword(WeaponStyle style) => style == WeaponStyle.Thrusting
             ? new WeaponStyleOptions(AttackChoice.None, AttackChoice.Lunge, true)
+            : style == WeaponStyle.Sweeping ? new WeaponStyleOptions(AttackChoice.None, AttackChoice.Sweep, true)
             : new WeaponStyleOptions(AttackChoice.Slash, AttackChoice.None, true);
     }
 

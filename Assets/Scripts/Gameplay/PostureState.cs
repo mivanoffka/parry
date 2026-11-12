@@ -44,6 +44,9 @@ namespace Parry
     public sealed class PostureState
     {
         public const float Maximum = 100;
+        public float ParryWindow { get; set; } = .196f;
+        public float ParryWindowMultiplier => 1.5f - Pressure / Maximum;
+        public float CurrentParryWindow => ParryWindow * ParryWindowMultiplier;
         public const int WarmupPerStrongAttack = 3;
         public const int MaximumWarmup = WarmupPerStrongAttack * 2;
         public int Warmup { get; private set; }
@@ -100,6 +103,7 @@ namespace Parry
         float guardRaisedAt;
         bool strongAttackBreakPending;
         float brokenUntil, recoilUntil, parryUntil, nextParry, recoverAfter;
+        float raisedParryMultiplier;
         public void RecordCombat(float now) => recoverAfter = Math.Max(recoverAfter, now + 2);
 
         public void SetBlocking(bool blocking, float now)
@@ -123,7 +127,9 @@ namespace Parry
                 guardRaisedAt = now;
                 anticipatedAttack = false;
                 parryArmed = now >= nextParry;
-                parryUntil = parryArmed ? now + .28f : now;
+                // Freeze timing for this press so recovery cannot prolong an open window.
+                raisedParryMultiplier = ParryWindowMultiplier;
+                parryUntil = parryArmed ? now + ParryWindow * raisedParryMultiplier : now;
                 nextParry = now + .3f;
             }
             Blocking = blocking;
@@ -133,7 +139,8 @@ namespace Parry
             if (!Blocking || Disrupted(now) || !parryArmed || anticipatedAttack
                 || now < guardRaisedAt || now - guardRaisedAt > EarlyGuardGrace) return;
             anticipatedAttack = true;
-            parryUntil = Math.Max(parryUntil, now + Math.Max(0, windup) + .08f);
+            float anticipatedDuration = now - guardRaisedAt + Math.Max(0, windup) + .08f;
+            parryUntil = Math.Max(parryUntil, guardRaisedAt + anticipatedDuration * raisedParryMultiplier);
         }
         public void AddPressure(float amount, float now)
         {

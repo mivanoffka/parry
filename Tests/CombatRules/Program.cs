@@ -13,6 +13,26 @@ void ChargeStrongAttack(PostureState state)
 {
     for (int i = 0; i < PostureState.MaximumWarmup; i++) state.RecordOrdinaryContact();
 }
+Near(FighterSpacingRules.ContactFraction(-2, 0, 10, 0), .085f,
+    "A fast lunge stops at personal space instead of tunnelling through the opponent");
+Near(FighterSpacingRules.ContactFraction(-2, 0, .5f, 0), 1,
+    "Movement that ends before body contact is unchanged");
+Near(FighterSpacingRules.ContactFraction(-1.15f, 0, -1, 0), 1,
+    "Touching fighters can freely move apart");
+Near(FighterSpacingRules.ContactFraction(-1.15f, 0, 0, 1), 1,
+    "Touching fighters can slide sideways");
+Near(FighterSpacingRules.ContactFraction(-1, 0, 1, 0), 0,
+    "Overlapping bodies cannot move farther through one another");
+Near(FighterSpacingRules.ContactFraction(-1, 0, -1, 0), 1,
+    "Overlapping bodies can recover their spacing");
+Near(FighterSpacingRules.ContactFraction(-2, 2, 10, 0), 1,
+    "A roll past an opponent with enough clearance remains free");
+Near(FighterSpacingRules.ContactFraction(-2, 0, 0, 0), 1,
+    "A stationary body has no swept collision");
+float diagonalContact = FighterSpacingRules.ContactFraction(-2, -2, 3, 3);
+Near((float)Math.Sqrt(2) * (2 - 3 * diagonalContact), FighterSpacingRules.MinimumDistance,
+    "Diagonal movement stops at the same minimum distance");
+
 var warmup = new PostureState();
 warmup.ConfigureEndurance(1000);
 Check(!warmup.StrongAttackReady && warmup.StrongAttackCharges == 0, "Combat starts without powerful attack charges");
@@ -377,10 +397,42 @@ Check(!stretch.Relaxing && !stretch.BeginRelaxation(10.1f), "Stagger cancels rel
 stretch.Reset();
 Check(!stretch.Relaxing && !stretch.GuardTransition, "Respawn clears relaxation and pending transitions");
 
+foreach (float baseWindow in new[] { .196f, .28f })
+{
+    foreach (float load in new[] { 0f, 25f, 50f, 75f, 100f })
+    {
+        var concentrationGuard = new PostureState { ParryWindow = baseWindow };
+        concentrationGuard.AddPressure(load, 0);
+        float expected = baseWindow * (1.5f - load / 100);
+        Near(concentrationGuard.CurrentParryWindow, expected, "Concentration linearly scales each fighter's parry window");
+        // Wait out balance break at 100% without recovering pressure.
+        concentrationGuard.SetBlocking(true, 3);
+        Check(concentrationGuard.CanParry(3 + expected - .001f), "Scaled parry is available just before its deadline");
+        Check(!concentrationGuard.CanParry(3 + expected + .001f), "Scaled parry expires at the concentration-based deadline");
+    }
+}
+var frozenParry = new PostureState();
+frozenParry.SetBlocking(true, 10);
+frozenParry.AddPressure(75, 10.01f);
+Check(frozenParry.CanParry(10.29f), "Load changes do not resize an already opened parry");
+Check(!frozenParry.CanParry(10.30f), "An open parry retains its original deadline");
+var tiredAnticipation = new PostureState();
+tiredAnticipation.AddPressure(100, 0);
+tiredAnticipation.SetBlocking(true, 3);
+tiredAnticipation.AnticipateAttack(3.1f, .24f);
+Check(tiredAnticipation.CanParry(3.20f), "Anticipated parry uses the low-concentration multiplier");
+Check(!tiredAnticipation.CanParry(3.22f), "Anticipation cannot bypass concentration scaling");
+
 var defender = new PostureState();
+var enemyParry = new PostureState { ParryWindow = .28f };
+enemyParry.AddPressure(50, 0);
+enemyParry.SetBlocking(true, 1);
+Check(enemyParry.CanParry(1.279f), "Enemy retains its 280 ms parry window");
+Check(!enemyParry.CanParry(1.281f), "Enemy parry expires after 280 ms");
+defender.AddPressure(50, 0);
 defender.SetBlocking(true, 1);
-Check(defender.CanParry(1.27f), "Fresh guard allows a parry throughout the wider window");
-Check(!defender.CanParry(1.29f), "Holding guard does not extend the parry window");
+Check(defender.CanParry(1.195f), "Fresh guard allows a parry just before the 196 ms window ends");
+Check(!defender.CanParry(1.197f), "Holding guard does not extend the 196 ms parry window");
 defender.SetBlocking(false, 1.291f);
 Check(!defender.CanParry(1.291f), "Releasing guard disables parry");
 defender.SetBlocking(true, 1.295f);
@@ -389,7 +441,7 @@ defender.SetBlocking(false, 1.5f);
 defender.SetBlocking(true, 1.6f);
 Check(defender.CanParry(1.61f), "A later deliberate press reopens the window");
 
-defender.AddPressure(70, 1.61f);
+defender.AddPressure(20, 1.61f);
 defender.Deflect(1.62f);
 Near(defender.Pressure, 70, "Deflection preserves rather than restores defender concentration");
 Check(!defender.CanParry(1.63f), "One press deflects one strike");
@@ -397,7 +449,7 @@ var earlyGuard = new PostureState();
 earlyGuard.SetBlocking(true, 10);
 earlyGuard.AnticipateAttack(10.15f, .24f);
 Check(earlyGuard.CanParry(10.4f), "A block raised shortly before windup can parry its impact");
-Check(!earlyGuard.CanParry(10.48f), "The early-guard extension expires shortly after expected impact");
+Check(!earlyGuard.CanParry(10.72f), "The early-guard extension expires shortly after expected impact");
 earlyGuard.Reset();
 earlyGuard.SetBlocking(true, 10);
 earlyGuard.AnticipateAttack(10.21f, .9f);
@@ -416,7 +468,7 @@ earlyGuard.Reset();
 earlyGuard.SetBlocking(true, 30);
 earlyGuard.AnticipateAttack(30.1f, .24f);
 earlyGuard.AnticipateAttack(30.15f, .9f);
-Check(!earlyGuard.CanParry(30.5f), "Additional warnings cannot keep extending the same guard press");
+Check(!earlyGuard.CanParry(30.65f), "Additional warnings cannot keep extending the same guard press");
 earlyGuard.SetBlocking(false, 30.3f);
 Check(!earlyGuard.CanParry(30.32f), "Releasing guard also cancels its early-parry opportunity");
 
@@ -872,6 +924,20 @@ windupPreparation.Cancel();
 Check(!windupPreparation.Ready(52, .65f), "Interrupted preparation cannot release a powerful strike");
 
 var selector = new SpecialAttackSelector();
+var sweepStyle = WeaponStyleOptions.Sword(WeaponStyle.Sweeping);
+Check(sweepStyle.NormalAttack == AttackChoice.None && sweepStyle.StrongAttack == AttackChoice.Sweep && sweepStyle.CanGuard,
+    "Sweeping preparation offers a powerful sweep and guard without an ordinary attack");
+var sweepSelector = new SpecialAttackSelector();
+Check(sweepSelector.Begin(sweepStyle) == AttackChoice.Sweep && !sweepSelector.Holding,
+    "Prepared sweep commits on attack press");
+Check(sweepSelector.Release() == AttackChoice.None, "Releasing a sweep cannot trigger a second attack");
+Check(PowerfulSweep.IsPowerful(AttackChoice.Sweep) && PowerfulSweep.IsPowerful(AttackChoice.Lunge)
+    && !PowerfulSweep.IsPowerful(AttackChoice.Slash), "Both powerful choices use strong attack resource rules");
+Check(AttackClashRules.Phase(.1f, 0, PowerfulSweep.ActiveTime, PowerfulSweep.Recovery) == AttackPhase.Active,
+    "Released sweep has an active damage phase");
+Check(AttackClashRules.Phase(.3f, 0, PowerfulSweep.ActiveTime, PowerfulSweep.Recovery) == AttackPhase.Recovery,
+    "Sweep damage ends before its longer recovery");
+
 var normal = WeaponStyleOptions.Sword(WeaponStyle.Normal);
 var thrust = WeaponStyleOptions.Sword(WeaponStyle.Thrusting);
 Check(normal.StrongAttack == AttackChoice.None && normal.CanGuard, "Normal sword has no strong attack and supports guard");

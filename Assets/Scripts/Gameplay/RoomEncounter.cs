@@ -19,6 +19,15 @@ namespace Parry
             carrierHealth = keyCarrier.GetComponent<PracticeTarget>();
             foreach (var enemy in secondRoomEnemies)
                 enemy.GetComponent<EnemyBrain>().enabled = false;
+            ActivateSecondRoom();
+        }
+
+        void ActivateSecondRoom()
+        {
+            if (secondRoomEntered || !player.IsAlive || !secondRoomBounds.Contains(player.transform.position)) return;
+            secondRoomEntered = true;
+            foreach (var enemy in secondRoomEnemies)
+                enemy.GetComponent<EnemyBrain>().enabled = true;
         }
 
         void Update()
@@ -43,12 +52,7 @@ namespace Parry
                 doorOpened = true;
                 lockedDoor.SetActive(false);
             }
-            if (doorOpened && !secondRoomEntered && secondRoomBounds.Contains(player.transform.position))
-            {
-                secondRoomEntered = true;
-                foreach (var enemy in secondRoomEnemies)
-                    enemy.GetComponent<EnemyBrain>().enabled = true;
-            }
+            ActivateSecondRoom();
         }
 
         static float FlatDistance(Vector3 a, Vector3 b) => Vector3.ProjectOnPlane(a - b, Vector3.up).magnitude;
@@ -77,17 +81,18 @@ namespace Parry
         void OnGUI()
         {
             string objective;
-            if (!keyDropped) objective = "Room 1: defeat the guard to get the key";
-            else if (!hasKey) objective = "Pick up the golden key dropped by the guard";
-            else if (!doorOpened) objective = "Key acquired: approach the door to room 2";
-            else if (!secondRoomEntered) objective = "Door unlocked: enter room 2";
-            else
+            if (secondRoomEntered)
             {
                 int alive = 0;
                 foreach (var enemy in secondRoomEnemies)
                     if (enemy.GetComponent<PracticeTarget>().IsAlive) alive++;
-                objective = alive == 0 ? "Both rooms cleared!" : "Room 2: enemies remaining — " + alive;
+                objective = alive > 0 ? "Room 2: enemies remaining — " + alive
+                    : carrierHealth.IsAlive ? "Room 2 cleared" : "Both rooms cleared!";
             }
+            else if (!keyDropped) objective = "Room 1: defeat the guard to get the key";
+            else if (!hasKey) objective = "Pick up the golden key dropped by the guard";
+            else if (!doorOpened) objective = "Key acquired: approach the door to room 2";
+            else objective = "Door unlocked: enter room 2";
             GUI.Box(new Rect(12, 106, 355, 30), objective);
         }
     }

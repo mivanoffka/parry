@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../Assets/Scripts/Gameplay/FighterSpacingRules.cs" Link="FighterSpacingRules.cs" />
     <Compile Include="../../Assets/Scripts/Gameplay/CameraZoom.cs" Link="CameraZoom.cs" />
     <Compile Include="../../Assets/Scripts/Gameplay/LocomotionCycle.cs" Link="LocomotionCycle.cs" />
     <Compile Include="../../Assets/Scripts/Gameplay/PostureState.cs" Link="PostureState.cs" />

@@ -35,6 +35,7 @@ namespace Parry
         void Awake()
         {
             health = maxHealth;
+            FighterSpacing.Install(gameObject);
             home = transform.position;
             visual = GetComponentInChildren<SpriteRenderer>();
             baseColor = visual != null ? visual.color : Color.white;
@@ -130,6 +131,7 @@ namespace Parry
         public bool Move(Vector3 displacement)
         {
             ResolveOverlaps();
+            displacement = FighterSpacing.Constrain(transform, displacement);
             float distance = displacement.magnitude;
             if (distance < .0001f) return false;
             Capsule(out Vector3 bottom, out Vector3 top, out float radius);
@@ -145,6 +147,7 @@ namespace Parry
         public bool CanMove(Vector3 displacement)
         {
             Physics.SyncTransforms();
+            if ((FighterSpacing.Constrain(transform, displacement) - displacement).sqrMagnitude > .000001f) return false;
             float distance = displacement.magnitude;
             if (distance < .0001f) return false;
             Capsule(out Vector3 bottom, out Vector3 top, out float radius);

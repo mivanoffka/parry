@@ -7,6 +7,44 @@ namespace Parry.Editor
 {
     public static class RoomEncounterVerification
     {
+        public static void RunSpawnInside()
+        {
+            EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");
+            var rooms = UnityEngine.Object.FindAnyObjectByType<RoomEncounter>();
+            var data = new SerializedObject(rooms);
+            var player = (PlayerMotor)data.FindProperty("player").objectReferenceValue;
+            Move(player, data.FindProperty("secondRoomBounds").boundsValue.center);
+            bool done = false;
+            EditorApplication.update += () =>
+            {
+                if (done || !EditorApplication.isPlaying || Time.timeSinceLevelLoad < .2f) return;
+                done = true;
+                try
+                {
+                    var activeRooms = UnityEngine.Object.FindAnyObjectByType<RoomEncounter>();
+                    var runtimeData = new SerializedObject(activeRooms);
+                    var door = (GameObject)runtimeData.FindProperty("lockedDoor").objectReferenceValue;
+                    if (!door.activeSelf)
+                        throw new InvalidOperationException("Starting inside room two must not unlock the door.");
+                    var guards = runtimeData.FindProperty("secondRoomEnemies");
+                    for (int i = 0; i < guards.arraySize; i++)
+                    {
+                        var guard = (Transform)guards.GetArrayElementAtIndex(i).objectReferenceValue;
+                        if (!guard.GetComponent<EnemyBrain>().enabled)
+                            throw new InvalidOperationException("Room two guard stayed inactive when the player spawned inside.");
+                    }
+                    Debug.Log("PARRY ROOM TWO SPAWN INSIDE PASSED");
+                    EditorApplication.Exit(0);
+                }
+                catch (Exception error)
+                {
+                    Debug.LogException(error);
+                    EditorApplication.Exit(1);
+                }
+            };
+            EditorApplication.EnterPlaymode();
+        }
+
         public static void Run()
         {
             foreach (string path in new[] { "Assets/Scenes/0.unity", "Assets/Scenes/SampleScene.unity" })

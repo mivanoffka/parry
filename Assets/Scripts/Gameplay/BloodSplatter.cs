@@ -29,11 +29,36 @@ namespace Parry
             return effects.AddComponent<BloodSplatter>();
         }
 
-        void Awake()
+        void OnEnable()
         {
             view = Camera.main;
-            for (int index = 0; index < droplets.Length; index++) droplets[index] = CreateSprite("Blood droplet");
-            for (int index = 0; index < stains.Length; index++) stains[index] = CreateSprite("Blood stain");
+            // Managed pools are reset by a script reload, while their scene objects survive.
+            int dropletIndex = 0, stainIndex = 0;
+            foreach (var renderer in GetComponentsInChildren<SpriteRenderer>(true))
+            {
+                if (renderer.transform.parent != transform) continue;
+                if (renderer.name == "Blood droplet" && dropletIndex < droplets.Length)
+                    droplets[dropletIndex++] = renderer;
+                else if (renderer.name == "Blood stain" && stainIndex < stains.Length)
+                    stains[stainIndex++] = renderer;
+            }
+            for (int index = 0; index < droplets.Length; index++)
+            {
+                if (droplets[index] == null) droplets[index] = CreateSprite("Blood droplet");
+                droplets[index].enabled = false;
+            }
+            for (int index = 0; index < stains.Length; index++)
+            {
+                if (stains[index] == null) stains[index] = CreateSprite("Blood stain");
+                stains[index].enabled = false;
+            }
+            nextDroplet = nextStain = 0;
+        }
+
+        Quaternion ViewRotation()
+        {
+            if (view == null) view = Camera.main;
+            return view != null ? view.transform.rotation : Quaternion.identity;
         }
 
         SpriteRenderer CreateSprite(string label)
@@ -57,7 +82,7 @@ namespace Parry
                 int slot = nextDroplet++ % droplets.Length;
                 var droplet = droplets[slot];
                 droplet.transform.position = contact + Random.insideUnitSphere * .12f;
-                droplet.transform.rotation = view.transform.rotation;
+                droplet.transform.rotation = ViewRotation();
                 float size = Random.Range(.045f, .11f);
                 droplet.transform.localScale = new Vector3(size, size * Random.Range(1.2f, 2.2f), 1);
                 droplet.color = new Color(Random.Range(.45f, .7f), .015f, .035f, .95f);
@@ -118,7 +143,7 @@ namespace Parry
                 else
                 {
                     droplet.transform.position += displacement;
-                    droplet.transform.rotation = view.transform.rotation;
+                    droplet.transform.rotation = ViewRotation();
                 }
             }
             for (int index = 0; index < stains.Length; index++)

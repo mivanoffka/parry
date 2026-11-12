@@ -36,6 +36,7 @@ namespace Parry.Editor
                 enemy.Guard.State.ConfigureEndurance(500); enemy.Guard.State.Reset();
                 enemy.transform.position = player.transform.position + Vector3.forward * 2.8f;
                 Physics.SyncTransforms();
+                Set(enemy, "powerfulSweepChance", 0f);
                 Set(enemy, "lungeChance", 1f); Set(enemy, "nextAttackAt", 0f); Set(enemy, "nextLungeAt", 0f);
                 ((EnemyTactics)typeof(EnemyBrain).GetField("tactics", Flags).GetValue(enemy)).Reengage(0, Time.time);
                 Require(!(bool)Call(enemy, "CanConsiderLunge", player.transform.position - enemy.transform.position),
