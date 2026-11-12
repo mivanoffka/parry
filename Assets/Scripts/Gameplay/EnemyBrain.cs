@@ -125,6 +125,8 @@ namespace Parry
         }
         PracticeTarget health;
         SpriteRenderer visual;
+        Sprite frontSprite;
+        Material frontMaterial;
         Transform shadow;
         LineRenderer warning;
         Vector3 facing = Vector3.back;
@@ -184,6 +186,11 @@ namespace Parry
             Guard = GetComponent<CombatGuard>();
             Guard.State.ConfigureEndurance(endurance);
             visual = GetComponentInChildren<SpriteRenderer>();
+            if (visual != null)
+            {
+                frontSprite = visual.sprite;
+                frontMaterial = visual.sharedMaterial;
+            }
             warning = DemoArt.Line("Enemy attack warning", transform, new Color(1, .23f, .18f), .07f);
             warning.enabled = false;
             shadow = transform.Find("Ground shadow");
@@ -264,17 +271,8 @@ namespace Parry
             }
             if (Rolling)
             {
-                Guard.Tick(false, facing);
-                if (lungeReleaseFrame == Time.frameCount) return;
-                float elapsed = Mathf.Min(Time.deltaTime, rollRemaining);
-                bool moved = health.Move(rollDirection * currentRollSpeed * elapsed);
-                rollRemaining = Mathf.Max(0, rollRemaining - elapsed);
-                if (!moved || rollRemaining <= 0)
-                {
-                    UpdateTactics(delta);
-                    if (tactics.Retreating) BeginRetreat();
-                    else BeginGuard();
-                }
+                Guard.Tick(false, facing, rolling: true);
+                if (lungeReleaseFrame != Time.frameCount) AdvanceRoll(delta);
                 return;
             }
             if (!TargetPreparingLunge && !TargetUnblockable) lungeResponsePrepared = lungeParryCommitted = false;
@@ -572,11 +570,9 @@ namespace Parry
                 && BeginRoll(plannedLungeDirection, rollSpeed * rollDuration, false))
             {
                 dodgingLunge = true;
-                Guard.Tick(false, facing);
+                Guard.Tick(false, facing, rolling: true);
                 // Advance the first roll slice before the earlier-running attacker tests its blade.
-                float elapsed = Mathf.Min(Time.deltaTime, rollRemaining);
-                health.Move(rollDirection * currentRollSpeed * elapsed);
-                rollRemaining -= elapsed;
+                AdvanceRoll(delta);
                 return;
             }
             lungeParryCommitted = true;
@@ -647,6 +643,20 @@ namespace Parry
             if (approach.sqrMagnitude < .01f || !BeginRoll(approach, travel, true)) return false;
             tactics.Reengage(Guard.Pressure, Time.time);
             return true;
+        }
+
+        void AdvanceRoll(Vector3 targetDelta)
+        {
+            float elapsed = Mathf.Min(Time.deltaTime, rollRemaining);
+            bool moved = health.Move(rollDirection * currentRollSpeed * elapsed);
+            rollRemaining = Mathf.Max(0, rollRemaining - elapsed);
+            if (moved && rollRemaining > 0) return;
+
+            rollRemaining = 0;
+            Guard.State.CompleteRoll(Time.time);
+            UpdateTactics(targetDelta);
+            if (tactics.Retreating) BeginRetreat();
+            else BeginGuard();
         }
 
         bool BeginRoll(Vector3 direction, float distance, bool closing)
@@ -768,6 +778,7 @@ namespace Parry
             weapon.ChargeGlint(prepare, performingLunge && state == State.Windup);
             if (!health.IsAlive || visual == null) return;
             Camera camera = Camera.main;
+            DemoArt.FaceCharacter(visual, frontSprite, frontMaterial, camera, Rolling ? rollDirection : facing);
             float side = Vector3.Dot(facing, camera.transform.right);
             float thrust = swing >= 0 ? Mathf.Sin(Mathf.Pow(swing, .55f) * Mathf.PI) : 0;
             float tension = Mathf.SmoothStep(0, 1, Mathf.Clamp01(prepare / .78f));
@@ -803,7 +814,7 @@ namespace Parry
         {
             return (state == State.Chase || state == State.Guard || state == State.Recovery && Time.time >= stateUntil)
                 && Time.time >= Mathf.Max(nextAttackAt, tactics.AttackBlockedUntil)
-                && Guard.State.CanAttack(Time.time) && Guard.State.CanSpendForRoll(attackPressure, Time.time)
+                && Guard.State.CanAttack(Time.time)
                 && Time.time >= stepRecoilUntil
                 && (!player.AttackThreatening || tactics.ExploitingWeakness
                     || Vector3.Angle(player.AttackFacing, transform.position - player.transform.position) > player.ThreatHalfAngle + 10)

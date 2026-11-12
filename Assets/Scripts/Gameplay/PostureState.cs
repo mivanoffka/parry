@@ -141,20 +141,18 @@ namespace Parry
             RecordCombat(now);
             if (Broken(now)) return;
             Pressure = Math.Min(Maximum, Pressure + NormalizeCost(amount));
-            if (Pressure >= Maximum)
-            {
-                brokenUntil = now + 1.25f;
-                Blocking = false;
-                CancelRelaxation();
-            }
+            if (Pressure >= Maximum) BreakBalance(now);
+        }
+        void BreakBalance(float now)
+        {
+            brokenUntil = Math.Max(brokenUntil, now + 1.25f);
+            Blocking = false;
+            CancelRelaxation();
         }
         public void Block(float now, bool powerful = false)
         {
             AddPressure(28, now);
-            if (!powerful) return;
-            brokenUntil = Math.Max(brokenUntil, now + 1.25f);
-            Blocking = false;
-            CancelRelaxation();
+            if (powerful) BreakBalance(now);
         }
         public void Parry(float now, bool powerful = false)
         {
@@ -182,7 +180,15 @@ namespace Parry
         public bool TrySpendForAttack(float pressureCost, float now) =>
             CanAttack(now) && TrySpendConcentration(pressureCost, now);
         public bool TrySpendForRoll(float pressureCost, float now) => TrySpendConcentration(pressureCost, now);
-        public bool TrySpendForPreparation(float pressureCost, float now) => TrySpendConcentration(pressureCost, now);
+        public bool TrySpendForPreparation(float pressureCost, float now) =>
+            Pressure + NormalizeCost(pressureCost) < Maximum && TrySpendConcentration(pressureCost, now);
+
+        public void CompleteRoll(float now)
+        {
+            if (Pressure < Maximum || Broken(now)) return;
+            RecordCombat(now);
+            BreakBalance(now);
+        }
         public bool TrySpendForStrongAttack(float pressureCost, float now)
         {
             if (pressureCost < 0 || !CanAttack(now) || strongAttackBreakPending || !StrongAttackReady) return false;
@@ -206,15 +212,14 @@ namespace Parry
         }
         bool TrySpendConcentration(float pressureCost, float now)
         {
-            if (!CanSpendForRoll(pressureCost, now)) return false;
+            if (pressureCost < 0 || Disrupted(now)) return false;
             CancelRelaxation();
-            AddPressure(pressureCost, now);
+            Pressure = Math.Min(Maximum, Pressure + NormalizeCost(pressureCost));
             RecordCombat(now);
             SetBlocking(false, now);
             return true;
         }
-        public bool CanSpendForRoll(float pressureCost, float now) => pressureCost >= 0 && !Disrupted(now)
-            && Pressure + NormalizeCost(pressureCost) < Maximum;
+        public bool CanSpendForRoll(float pressureCost, float now) => pressureCost >= 0 && !Disrupted(now);
         public void Tick(float deltaTime, float now)
         {
             float elapsed = Math.Max(0, deltaTime);

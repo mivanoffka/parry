@@ -46,11 +46,11 @@ namespace Parry
             : GetComponent<EnemyBrain>() is EnemyBrain enemy && enemy.PowerfulThreat;
         readonly Collider[] nearbyDefenders = new Collider[64];
         public void SetFacing(Vector3 facing) => Facing = facing;
-        public void Tick(bool wantsBlock, Vector3 facing)
+        public void Tick(bool wantsBlock, Vector3 facing, bool rolling = false)
         {
             Facing = facing;
             State.SetBlocking(wantsBlock, Time.time);
-            State.Tick(Time.deltaTime, Time.time);
+            if (!rolling) State.Tick(Time.deltaTime, Time.time);
         }
         public void AnnounceAttack(float windup, float reach)
         {

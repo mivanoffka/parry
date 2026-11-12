@@ -25,9 +25,9 @@ namespace Parry
             return material;
         }
 
-        public static Sprite Character(bool target)
+        public static Sprite Character(bool target, bool back = false)
         {
-            string key = target ? "target" : "player";
+            string key = target ? "target" : back ? "player-back" : "player";
             if (sprites.TryGetValue(key, out var cached) && cached != null) return cached;
             const int size = 64;
             Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, false) { filterMode = FilterMode.Point, name = key };
@@ -52,11 +52,14 @@ namespace Parry
                     if (y < 27 && y > 8 && Mathf.Abs(dx) < 7 + (27 - y) * .32f) c = new Color(.64f, .16f, .27f);
                     if (y > 2 && y < 9 && (Mathf.Abs(x - 23) < 5 || Mathf.Abs(x - 41) < 5)) c = ink;
                     if (dx * dx / 440 + (y - 41) * (y - 41) / 270 < 1) c = ink;
-                    if (dx * dx / 340 + (y - 42) * (y - 42) / 190 < 1) c = new Color(.92f, .88f, .74f);
+                    if (dx * dx / 340 + (y - 42) * (y - 42) / 190 < 1)
+                        c = back ? new Color(.45f, .39f, .36f) : new Color(.92f, .88f, .74f);
                     if (y > 49 && y < 60 && (Mathf.Abs(x - 16) < 5 || Mathf.Abs(x - 47) < 5)) c = ink;
-                    if (y > 38 && y < 46 && (Mathf.Abs(x - 25) < 3 || Mathf.Abs(x - 39) < 3)) c = ink;
-                    if (y > 29 && y < 33 && Mathf.Abs(dx) < 4) c = ink;
-                    if (y > 18 && y < 23 && Mathf.Abs(dx) < 4) c = new Color(1, .77f, .35f);
+                    if (!back && y > 38 && y < 46 && (Mathf.Abs(x - 25) < 3 || Mathf.Abs(x - 39) < 3)) c = ink;
+                    if (!back && y > 29 && y < 33 && Mathf.Abs(dx) < 4) c = ink;
+                    if (!back && y > 18 && y < 23 && Mathf.Abs(dx) < 4) c = new Color(1, .77f, .35f);
+                    if (back && y > 33 && y < 54 && Mathf.Abs(dx) < 1.5f) c = new Color(.29f, .24f, .25f);
+                    if (back && y > 9 && y < 26 && Mathf.Abs(dx) < 2) c = new Color(.43f, .10f, .20f);
                 }
                 pixels[y * size + x] = c;
             }
@@ -66,6 +69,18 @@ namespace Parry
             sprites[key] = sprite;
             return sprite;
         }
+        public static void FaceCharacter(SpriteRenderer renderer, Sprite front, Material frontMaterial, Camera camera, Vector3 facing)
+        {
+            if (front == null || front.name != "player") return;
+            Vector3 away = camera.orthographic ? camera.transform.forward : renderer.transform.position - camera.transform.position;
+            away.y = 0;
+            bool back = Vector3.Dot(facing, away.normalized) > .5f;
+            Sprite sprite = back ? Character(false, true) : front;
+            if (renderer.sprite == sprite) return;
+            renderer.sprite = sprite;
+            renderer.sharedMaterial = back ? LitSpriteMaterial(sprite.name) : frontMaterial;
+        }
+
         public static Sprite Disc()
         {
             if (sprites.TryGetValue("disc", out var s) && s != null) return s;

@@ -25,11 +25,11 @@ def height(kind, x, y):
             ring = math.hypot(dx, y-38)
             return .13 + .4*math.sqrt(1-dome) + (.035 if 11 < ring < 15 or ring < 6 else 0)
         return .06 if abs(dx) < 4 and y < 35 else 0
-    # Head dome, muzzle and recessed eyes. Head overrides the cloak below it.
+    # The head dome overrides the cloak below it. Only the front has recessed eyes.
     dome = dx*dx/440 + (y-41)*(y-41)/270
     if dome < 1:
         h = .22 + .55*math.sqrt(1-dome)
-        if 38 < y < 46 and (abs(x-25) < 3 or abs(x-39) < 3):
+        if kind == 'player' and 38 < y < 46 and (abs(x-25) < 3 or abs(x-39) < 3):
             h -= .055
         return h
     if 49 < y < 60 and (abs(x-16) < 5 or abs(x-47) < 5):
@@ -62,7 +62,7 @@ def png_chunk(kind, data):
 
 def generate():
     OUTPUT.mkdir(parents=True, exist_ok=True)
-    for kind in ('player', 'target', 'sword'):
+    for kind in ('player', 'player-back', 'target', 'sword'):
         width, height_px = (16 if kind == 'sword' else 64), 64
         rows = bytearray()
         for y in reversed(range(height_px)):  # PNG is top-down; Unity sprite UVs are bottom-up.

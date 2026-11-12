@@ -75,6 +75,8 @@ namespace Parry
         Camera view;
         public PlayerTargetLock TargetLock { get; private set; }
         SpriteRenderer visual;
+        Sprite frontSprite;
+        Material frontMaterial;
         LineRenderer slash;
         ArenaDemo arena;
         bool CircularAttacks => arena != null && arena.CircularAttacks;
@@ -117,6 +119,11 @@ namespace Parry
             Hitbox = gameObject.AddComponent<CombatHitbox>();
             view = Camera.main;
             visual = GetComponentInChildren<SpriteRenderer>();
+            if (visual != null)
+            {
+                frontSprite = visual.sprite;
+                frontMaterial = visual.sharedMaterial;
+            }
             slash = DemoArt.Line("Sword arc", transform, new Color(1, .85f, .5f), .1f);
             DrawSlash(0, Facing);
             slash.startColor = slash.endColor = new Color(1, .87f, .6f, .35f);
@@ -217,7 +224,7 @@ namespace Parry
             bool wantsBlock = (Mouse.current != null && Mouse.current.rightButton.isPressed)
                 || (keyboard != null && keyboard.kKey.isPressed) || (pad != null && pad.leftShoulder.isPressed);
             if (wantsBlock && (Style == WeaponStyle.Thrusting || UnblockableAttack)) CancelAttack();
-            Guard.Tick(wantsBlock && WeaponStyleOptions.Sword(Style).CanGuard && !Attacking && !Rolling, Facing);
+            Guard.Tick(wantsBlock && WeaponStyleOptions.Sword(Style).CanGuard && !Attacking && !Rolling, Facing, Rolling);
             if (Guard.Disrupted)
             {
                 CancelAttack();
@@ -291,6 +298,7 @@ namespace Parry
             {
                 controller.Move((rollDirection * rollSpeed + Vector3.down * 2) * dt);
                 rollRemaining = Mathf.Max(0, rollRemaining - dt);
+                if (!Rolling) Guard.State.CompleteRoll(Time.time);
                 velocity = Vector3.zero;
             }
             else
@@ -355,7 +363,9 @@ namespace Parry
             float prepare = preparingLunge ? preparation.WindupProgress(Time.time, PreparationWindup)
                 : Attacking && elapsed < CurrentWindup ? elapsed / CurrentWindup : 0;
             float returnToReady = Attacking ? Mathf.Clamp01((elapsed - CurrentWindup - CurrentActive) / CurrentRecovery) : 0;
-            Vector3 poseDirection = Attacking ? attackDirection : Facing;
+            Vector3 poseDirection = AttackFacing;
+            if (visual != null && IsAlive)
+                DemoArt.FaceCharacter(visual, frontSprite, frontMaterial, view, Rolling ? rollDirection : poseDirection);
             weapon.Pose(poseDirection, IsAlive && !Rolling, Guard.Blocking, Guard.Disrupted, swing, prepare,
                 preparingLunge ? AttackReach * .85f : CurrentReach, halfAngle, returnToReady, CircularStrike && !preparingLunge, ThrustAttack || preparingLunge, UnblockableAttack || preparingLunge,
                 Attacking ? ThrustAttack : Style == WeaponStyle.Thrusting, Guard.State.Relaxing, slashSequence.Direction);
