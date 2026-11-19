@@ -13,6 +13,158 @@ void ChargeStrongAttack(PostureState state)
 {
     for (int i = 0; i < PostureState.MaximumWarmup; i++) state.RecordOrdinaryContact();
 }
+Check(WeaponStyleOptions.AllowedStyle(WeaponKind.Axe, WeaponStyle.Thrusting) == WeaponStyle.Normal,
+    "Axe key 2 returns to ordinary attacks");
+Check(WeaponStyleOptions.ForWeapon(WeaponKind.Axe, WeaponStyle.Thrusting).StrongAttack == AttackChoice.None,
+    "Axe cannot select a lunge even through sword style options");
+Check(!WeaponStyleOptions.AllowsAttack(WeaponKind.Axe, AttackChoice.Lunge)
+    && !WeaponStyleOptions.AllowsAttack(WeaponKind.Axe, AttackChoice.Thrust), "Axe rejects queued lunge and thrust attacks");
+Check(WeaponStyleOptions.ForWeapon(WeaponKind.Axe, WeaponStyle.Sweeping).StrongAttack == AttackChoice.Sweep,
+    "Axe retains key 3 sweep");
+Check(!WeaponStyleOptions.ForWeapon(WeaponKind.Axe, WeaponStyle.Normal).CanGuard,
+    "Axe options disable guard");
+Check(EnemyTactics.CanPunishWindup(.8f, .24f, .1f), "Enemy can punish the beginning of an axe windup");
+Check(!EnemyTactics.CanPunishWindup(.21f, .24f, .1f), "A normal sword windup remains an immediate threat");
+Check(!EnemyTactics.CanPunishWindup(.3f, .24f, .1f), "Enemy defends when the axe strike is close");
+Check(!EnemyTactics.CanPunishWindup(.8f, .24f, .1f, .4f), "Counterattack delay cannot be skipped to punish a windup");
+Check(!EnemyTactics.CanPunishWindup(.6f, .48f, .1f), "Slow guard readiness after relaxation counts against the opening");
+Check(!EnemyTactics.ShouldPunishHeldWindup(0), "Enemy does not treat a just-ready strike as a stalled attack");
+Check(!EnemyTactics.ShouldPunishHeldWindup(.19f), "Held windup reaction allows a short observation delay");
+Check(EnemyTactics.ShouldPunishHeldWindup(.21f), "Enemy attacks when a ready strike remains held");
+var observedPowerfulHold = new AttackPreparation();
+observedPowerfulHold.Begin(10);
+Near(observedPowerfulHold.ReadyHeldDuration(10.5f, .9f), 0, "Unfinished powerful windup has no held-ready time");
+Check(EnemyTactics.ShouldPunishHeldWindup(observedPowerfulHold.ReadyHeldDuration(11.2f, .9f)),
+    "A held powerful windup offers the same attack opening as an ordinary strike");
+observedPowerfulHold.Cancel();
+Check(!EnemyTactics.ShouldPunishHeldWindup(observedPowerfulHold.ReadyHeldDuration(15, .9f)),
+    "Cancelled powerful preparation cannot leave a stale attack opening");
+var charge = new AttackCharge();
+Near(charge.Strength(0), 1, "Idle charge has baseline strength");
+charge.Begin(10, 1.5f, .25f, 2, 3);
+Near(charge.Strength(10), 1, "A new windup starts at baseline strength");
+Near(charge.Strength(10.75f), 1.5f, "Strike strength grows continuously with held time");
+Check(!charge.Perfect(11.49f), "Perfect window does not open before the charge limit");
+Check(!charge.Perfect(11.5f), "Reaching sustained strength begins a smooth rise, not an instant peak");
+Near(charge.Strength(11.5f), 2, "Bonus strength starts continuously at the sustained cap");
+Near(charge.Strength(11.5375f), 2.5f, "Bonus strength rises smoothly toward its peak");
+Near(charge.Strength(11.7125f), 2.5f, "Bonus strength falls smoothly from its peak");
+Near(charge.Strength(11.625f), 3, "The middle of the window reaches maximum strength");
+Near(charge.Meter(10), 1f / 3, "Base strength fills a proportional part of the charge meter");
+Near(charge.Meter(11.625f), 1, "Perfect window fills the entire charge meter");
+Check(charge.Perfect(11.66f) && !charge.Perfect(11.7f), "Perfect plateau ends before the smooth fall completes");
+Near(charge.Strength(11.75f), 2, "Missing the perfect window returns to the sustained cap");
+Near(charge.Meter(11.75f), 2f / 3, "Meter falls back to the proportional sustained cap after the perfect window");
+Near(charge.Strength(30), 2, "Long holds cannot retrigger the perfect window");
+charge.Release(11.6f);
+Near(charge.Strength(30), 3, "Perfect strength is frozen at release for the full strike");
+Check(charge.Perfect(30), "Perfect release retains its result during the strike");
+charge.Release(31);
+Near(charge.Strength(31), 3, "A second release cannot overwrite the sampled charge");
+charge.Cancel();
+Check(!charge.Active && !charge.Released && !charge.Perfect(30), "Cancellation clears all charge and perfect state");
+Near(charge.Strength(30), 1, "Cancelled attacks cannot leak their multiplier into later hits");
+charge.Begin(40, 1.5f, .25f, 2, 3);
+charge.Release(40.375f);
+Near(charge.Strength(50), 1.25f, "Early release cannot gain strength while finishing minimum windup");
+charge.Begin(60, 1.5f, .25f, 2, 3);
+charge.Release(62);
+Near(charge.Strength(80), 2, "An overheld release retains only sustained strength");
+charge.Begin(90, 1, 0, 2, 3);
+Check(!charge.Perfect(91) && charge.Strength(91) == 2, "A zero-length perfect window disables the timing bonus");
+Near(AttackCharge.DefaultDuration, 1.5f / 2.5f, "Default charge buildup is 2.5 times faster");
+Near(AttackCharge.DefaultPerfectWindow, .25f / 2.5f, "Default bonus window is accelerated at the same rate");
+for (int sample = 0; sample <= 100; sample++)
+{
+    float time = 100 + sample * .01f;
+    var envelopeCharge = new AttackCharge();
+    envelopeCharge.Begin(100, .6f, .1f, 2, 3);
+    Check(Math.Abs(envelopeCharge.Strength(time + .0001f) - envelopeCharge.Strength(time)) < .02f,
+        "Charge strength has no abrupt jump at sampled charge or bonus boundaries");
+}
+float quickRelease = EnemyTactics.ChooseChargeRelease(.24f, .6f, .1f, true, false, false, false, 0, false);
+Near(quickRelease, .15f, "A threatened enemy chooses an early release");
+Near(EnemyTactics.ChooseChargeRelease(.24f, .6f, .1f, false, true, false, false, 0, false), .65f,
+    "An enemy charges into the peak against broken balance");
+Near(EnemyTactics.ChooseChargeRelease(.24f, .6f, .1f, false, false, false, true, 0, false), .65f,
+    "An enemy charges to increase pressure against a blocking target");
+Near(EnemyTactics.ChooseChargeRelease(.24f, .6f, .1f, false, true, false, true, 80, false), quickRelease,
+    "Low concentration overrides the temptation to use a long charge");
+Near(EnemyTactics.ChooseChargeRelease(.24f, .6f, .1f, false, false, true, true, 0, false), quickRelease,
+    "An enemy quickly punishes a held player windup");
+Near(EnemyTactics.ChooseChargeRelease(.24f, .6f, .1f, false, false, false, true, 0, true), quickRelease,
+    "A moving opponent makes a long charge less useful");
+var enemyCharge = new AttackCharge();
+enemyCharge.Begin(200, .6f, .1f, 2, 3);
+enemyCharge.Release(200 + EnemyTactics.ChooseChargeRelease(.24f, .6f, .1f, false, true, false, false, 0, false));
+Near(enemyCharge.Strength(201), 3, "Enemy release planning uses the same perfect peak as the player");
+var chargedBlock = new PostureState();
+chargedBlock.ConfigureEndurance(1000);
+chargedBlock.Block(0, incomingStrength: 3);
+Near(chargedBlock.Pressure, 8.4f, "Perfect strike multiplies blocked concentration damage");
+var chargedParry = new PostureState();
+chargedParry.ConfigureEndurance(1000);
+chargedParry.Parry(0, incomingStrength: 3);
+Near(chargedParry.Pressure, 4.2f, "Perfect strike multiplies concentration spent to parry");
+var chargedPowerfulParry = new PostureState();
+chargedPowerfulParry.ConfigureEndurance(1000);
+chargedPowerfulParry.Parry(0, powerful: true, incomingStrength: 3);
+Check(chargedPowerfulParry.Pressure == 100 && !chargedPowerfulParry.Broken(0),
+    "Perfect powerful parries preserve the non-breaking defense rule");
+
+var releaseSelector = new SpecialAttackSelector();
+Check(releaseSelector.Begin(WeaponStyleOptions.Sword(WeaponStyle.Normal), true) == AttackChoice.Slash
+    && releaseSelector.Holding, "New mode starts an ordinary windup on press");
+Check(releaseSelector.Release() == AttackChoice.None, "Releasing an ordinary windup does not queue a second attack");
+Check(releaseSelector.Begin(WeaponStyleOptions.Sword(WeaponStyle.Thrusting), true) == AttackChoice.None,
+    "New mode holds a powerful attack until release");
+Check(releaseSelector.Release() == AttackChoice.Lunge, "Releasing a powerful preparation commits the lunge");
+releaseSelector.Begin(WeaponStyleOptions.Sword(WeaponStyle.Sweeping), true);
+releaseSelector.Cancel();
+Check(releaseSelector.Release() == AttackChoice.None, "Guard cancellation cannot release a buffered sweep");
+var heldPowerfulPreparation = new AttackPreparation();
+Check(!heldPowerfulPreparation.Active, "Selecting a powerful style alone does not start its preparation");
+heldPowerfulPreparation.Begin(10);
+Check(!heldPowerfulPreparation.Ready(10.4f, .9f), "A pressed powerful attack must complete its windup");
+Near(heldPowerfulPreparation.RemainingWindup(10.4f, .9f), .5f,
+    "Early release waits only for the remaining powerful windup");
+Near(heldPowerfulPreparation.Tick(16, expire: false), 6,
+    "Held powerful attack bills the entire held duration");
+Check(heldPowerfulPreparation.Active && heldPowerfulPreparation.Ready(16, .9f),
+    "A fully drawn powerful attack stays ready beyond five seconds");
+heldPowerfulPreparation.Cancel();
+Check(!heldPowerfulPreparation.Active && !heldPowerfulPreparation.Ready(16, .9f),
+    "Cancelling a held powerful attack clears readiness");
+var legacyPowerfulPreparation = new AttackPreparation();
+legacyPowerfulPreparation.Begin(10);
+Near(legacyPowerfulPreparation.Tick(16), 5, "Legacy powerful preparation keeps its five-second billing cap");
+Check(!legacyPowerfulPreparation.Active, "Legacy powerful preparation still expires after five seconds");
+var releaseGate = new AttackReleaseGate();
+releaseGate.Begin(true);
+Near(releaseGate.Advance(.75f, .1f, .8f), .05f, "Held axe finishes its windup without entering the damage phase");
+Near(releaseGate.Advance(.8f, 3, .8f), 0, "A fully drawn weapon waits indefinitely for release");
+releaseGate.Release();
+Near(releaseGate.Advance(.8f, .06f, .8f), .06f, "Release immediately advances the active strike without repeating windup");
+releaseGate.Begin(true); releaseGate.Release();
+Near(releaseGate.Advance(.05f, .1f, .8f), .1f, "Early release still completes the weapon's remaining windup");
+releaseGate.Begin(false);
+Near(releaseGate.Advance(.75f, .1f, .8f), .1f, "Legacy timing never pauses for release");
+releaseGate.Begin(true); releaseGate.Cancel();
+Check(!releaseGate.Waiting, "Interrupted and cancelled windups clear release state");
+
+var axeParry = new PostureState();
+axeParry.SetBlocking(true, 1);
+Check(axeParry.CanParry(1.05f, .5f), "Axe can be parried early in a fresh guard");
+Check(axeParry.CanParry(1.22f) && !axeParry.CanParry(1.22f, .5f), "Axe has a shorter parry window than sword at the same concentration");
+var axeParryCost = new PostureState();
+axeParryCost.Parry(0, ordinaryCostMultiplier: 5);
+Near(axeParryCost.Pressure, 70, "An axe parry spends five times ordinary concentration");
+axeParryCost.AddPressure(10, .1f);
+axeParryCost.Parry(.2f, ordinaryCostMultiplier: 5);
+Check(axeParryCost.Pressure == 100 && !axeParryCost.Broken(.2f), "A successful axe parry retains non-breaking defense semantics");
+axeParry.Deflect(1.06f);
+Check(!axeParry.CanParry(1.07f, .5f), "A consumed axe parry window cannot reopen");
+
 Near(FighterSpacingRules.ContactFraction(-2, 0, 10, 0), .085f,
     "A fast lunge stops at personal space instead of tunnelling through the opponent");
 Near(FighterSpacingRules.ContactFraction(-2, 0, .5f, 0), 1,

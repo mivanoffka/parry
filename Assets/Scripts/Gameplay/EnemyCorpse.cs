@@ -8,7 +8,6 @@ namespace Parry
         Camera view;
         float fallAngle;
         float createdAt;
-        Transform skeleton;
         Vector3 deathDirection;
         float slideProgress;
         const float SlideDistance = .65f;
@@ -33,13 +32,6 @@ namespace Parry
             corpse.body.sharedMaterial = source.sharedMaterial;
             corpse.body.flipX = source.flipX;
             corpse.body.color = Color.Lerp(color, new Color(.18f, .13f, .16f), .5f);
-            var presentation = source.GetComponentInParent<CharacterPresentation>();
-            if (presentation != null) corpse.skeleton = presentation.CreateCorpseSkeleton(remains.transform);
-            if (corpse.skeleton != null)
-            {
-                corpse.body.enabled = false;
-                foreach (var part in corpse.skeleton.GetComponentsInChildren<SpriteRenderer>()) part.color = corpse.body.color;
-            }
             DemoArt.Shadow(remains.transform);
             corpse.LateUpdate();
             return corpse;
@@ -63,12 +55,7 @@ namespace Parry
             }
             slideProgress = slide;
             body.transform.rotation = view.transform.rotation * Quaternion.Euler(0, 0, fallAngle * Mathf.SmoothStep(0, 1, progress));
-            if (skeleton != null)
-            {
-                float fall = Mathf.SmoothStep(0, 1, progress);
-                skeleton.rotation = view.transform.rotation * Quaternion.Euler(0, 0, fallAngle * fall);
-                skeleton.localPosition = Vector3.up * Mathf.Lerp(.35f, .15f, fall);
-            }
+
         }
     }
 }

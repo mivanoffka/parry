@@ -50,6 +50,12 @@ namespace Parry
 
     public enum AttackChoice { None, Slash, Lunge, Thrust, Sweep }
     public enum WeaponStyle { Normal, Thrusting, Sweeping }
+    public enum WeaponKind { Fists, Sword, Axe }
+
+    public static class CombatTiming
+    {
+        public const float StrikeDurationMultiplier = 2;
+    }
 
     public static class PowerfulSweep
     {
@@ -68,6 +74,17 @@ namespace Parry
         public readonly bool CanGuard;
         public WeaponStyleOptions(AttackChoice normal, AttackChoice strong, bool guard)
         { NormalAttack = normal; StrongAttack = strong; CanGuard = guard; }
+        public static WeaponStyle AllowedStyle(WeaponKind weapon, WeaponStyle style) =>
+            weapon == WeaponKind.Fists || weapon == WeaponKind.Axe && style == WeaponStyle.Thrusting
+                ? WeaponStyle.Normal : style;
+        public static WeaponStyleOptions ForWeapon(WeaponKind weapon, WeaponStyle style)
+        {
+            var options = Sword(AllowedStyle(weapon, style));
+            return new WeaponStyleOptions(options.NormalAttack, options.StrongAttack, weapon != WeaponKind.Axe);
+        }
+        public static bool AllowsAttack(WeaponKind weapon, AttackChoice attack) => weapon == WeaponKind.Sword
+            || weapon == WeaponKind.Axe && (attack == AttackChoice.Slash || attack == AttackChoice.Sweep)
+            || weapon == WeaponKind.Fists && attack == AttackChoice.Slash;
         public static WeaponStyleOptions Sword(WeaponStyle style) => style == WeaponStyle.Thrusting
             ? new WeaponStyleOptions(AttackChoice.None, AttackChoice.Lunge, true)
             : style == WeaponStyle.Sweeping ? new WeaponStyleOptions(AttackChoice.None, AttackChoice.Sweep, true)
@@ -85,27 +102,100 @@ namespace Parry
             : duration <= 0 ? 1 : System.Math.Clamp((now - startedAt) / duration, 0, 1);
         public float RemainingWindup(float now, float duration) => Active
             ? System.Math.Max(0, duration - (now - startedAt)) : 0;
+        public float ReadyHeldDuration(float now, float duration) => Active
+            ? System.Math.Max(0, now - startedAt - duration) : 0;
         public bool Ready(float now, float duration) => Active && WindupProgress(now, duration) >= 1;
-        public float Tick(float now)
+        public float Tick(float now, bool expire = true)
         {
             if (!Active) return 0;
-            float until = System.Math.Min(now, startedAt + Duration);
+            float until = expire ? System.Math.Min(now, startedAt + Duration) : now;
             float elapsed = System.Math.Max(0, until - billedUntil);
             billedUntil += elapsed;
-            if (now >= startedAt + Duration) Active = false;
+            if (expire && now >= startedAt + Duration) Active = false;
             return elapsed;
         }
         public void Cancel() { Active = false; }
+    }
+
+    // Charge is sampled once on release, independently of the minimum animation windup.
+    public sealed class AttackCharge
+    {
+        public const float DefaultDuration = .6f;
+        public const float DefaultPerfectWindow = .1f;
+        public bool Active { get; private set; }
+        public bool Released { get; private set; }
+        float startedAt, duration, perfectWindow, cap, peak, releasedStrength;
+        bool releasedPerfect;
+        public void Begin(float now, float chargeDuration, float window, float sustainedStrength, float perfectStrength)
+        {
+            startedAt = now;
+            duration = System.Math.Max(.01f, chargeDuration);
+            perfectWindow = System.Math.Max(0, window);
+            cap = System.Math.Max(1, sustainedStrength);
+            peak = System.Math.Max(cap, perfectStrength);
+            Active = true; Released = false; releasedPerfect = false;
+            releasedStrength = 1;
+        }
+        public bool Perfect(float now) => Active && (Released ? releasedPerfect
+            : perfectWindow > 0 && now - startedAt >= duration + perfectWindow * .3f
+                && now - startedAt <= duration + perfectWindow * .7f);
+        public float Strength(float now)
+        {
+            if (!Active) return 1;
+            if (Released) return releasedStrength;
+            float extraTime = now - startedAt - duration;
+            if (perfectWindow > 0 && extraTime >= 0 && extraTime < perfectWindow)
+            {
+                float t = extraTime / perfectWindow;
+                float envelope = t < .3f ? t / .3f : t <= .7f ? 1 : (1 - t) / .3f;
+                envelope = envelope * envelope * (3 - 2 * envelope);
+                return cap + (peak - cap) * envelope;
+            }
+            float progress = System.Math.Clamp((now - startedAt) / duration, 0, 1);
+            return 1 + (cap - 1) * progress;
+        }
+        public float Meter(float now)
+        {
+            if (!Active) return 0;
+            float strength = Strength(now);
+            return System.Math.Clamp(strength / peak, 0, 1);
+        }
+        public void Release(float now)
+        {
+            if (!Active || Released) return;
+            releasedStrength = Strength(now);
+            releasedPerfect = Perfect(now);
+            Released = true;
+        }
+        public void Cancel() { Active = Released = releasedPerfect = false; releasedStrength = 1; }
+    }
+
+    public sealed class AttackReleaseGate
+    {
+        public bool Waiting { get; private set; }
+        public void Begin(bool waitForRelease) => Waiting = waitForRelease;
+        public void Release() => Waiting = false;
+        public void Cancel() => Waiting = false;
+        public float Advance(float elapsed, float delta, float windup) => Waiting
+            ? System.Math.Min(System.Math.Max(0, delta), System.Math.Max(0, windup - elapsed))
+            : System.Math.Max(0, delta);
     }
 
     public sealed class SpecialAttackSelector
     {
         public bool Holding { get; private set; }
         WeaponStyleOptions options;
-        public AttackChoice Begin(WeaponStyleOptions style)
+        bool releaseMode;
+        public AttackChoice Begin(WeaponStyleOptions style, bool holdToWindup = false)
         {
             Cancel();
             options = style;
+            releaseMode = holdToWindup;
+            if (holdToWindup)
+            {
+                Holding = true;
+                return style.NormalAttack;
+            }
             // Prepared strong-only actions commit on press; normal slashes retain release input.
             if (style.NormalAttack == AttackChoice.None) return style.StrongAttack;
             Holding = true;
@@ -115,7 +205,7 @@ namespace Parry
         {
             if (!Holding) return AttackChoice.None;
             Holding = false;
-            return options.NormalAttack;
+            return releaseMode ? options.NormalAttack == AttackChoice.None ? options.StrongAttack : AttackChoice.None : options.NormalAttack;
         }
         public void Cancel() { Holding = false; }
     }

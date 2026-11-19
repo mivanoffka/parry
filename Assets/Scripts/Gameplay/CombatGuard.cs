@@ -7,6 +7,10 @@ namespace Parry
     public sealed class CombatGuard : MonoBehaviour
     {
         public PostureState State { get; } = new PostureState();
+        public WeaponKind Weapon => GetComponent<PlayerMotor>() is PlayerMotor player ? player.EquippedWeapon : WeaponKind.Sword;
+        public float StrikeStrength => GetComponent<PlayerMotor>() is PlayerMotor player ? player.StrikeStrength
+            : GetComponent<EnemyBrain>() is EnemyBrain enemy ? enemy.StrikeStrength : 1;
+        bool CanDefendAgainst(CombatGuard attacker) => Weapon != WeaponKind.Axe && (Weapon != WeaponKind.Fists || attacker != null && attacker.Weapon == WeaponKind.Fists);
         public bool Broken => State.Broken(Time.time);
         public bool Disrupted => State.Disrupted(Time.time);
         public bool Blocking => State.Blocking;
@@ -17,7 +21,7 @@ namespace Parry
         public Vector3 Facing { get; private set; } = Vector3.back;
         float feedbackUntil;
         string feedback;
-        LineRenderer bar, background, flash, warmupBar, warmupBackground;
+        LineRenderer bar, background, flash, warmupBar, warmupBackground, chargeBar, chargeBackground;
         ParrySparks sparks;
         bool wasBroken;
         CombatGuard lastClashWith;
@@ -49,7 +53,7 @@ namespace Parry
         public void Tick(bool wantsBlock, Vector3 facing, bool rolling = false)
         {
             Facing = facing;
-            State.SetBlocking(wantsBlock, Time.time);
+            State.SetBlocking(wantsBlock && Weapon != WeaponKind.Axe, Time.time);
             if (!rolling) State.Tick(Time.deltaTime, Time.time);
         }
         public void AnnounceAttack(float windup, float reach)
@@ -68,7 +72,7 @@ namespace Parry
         }
         public bool TryClash(CombatGuard attacker, Vector3 incomingDirection, bool powerful = false)
         {
-            if (attacker == null || attacker == this) return false;
+            if (attacker == null || attacker == this || !CanDefendAgainst(attacker) || !attacker.CanDefendAgainst(this)) return false;
             // Resolving the pair interrupts both attacks immediately; a second callback cannot deal damage.
             if (lastClashFrame == Time.frameCount && lastClashWith == attacker) return true;
             if (Disrupted || attacker.Disrupted || Vector3.Angle(AttackFacing, -incomingDirection) > 70) return false;
@@ -79,8 +83,8 @@ namespace Parry
             bool parry = clash == AttackClash.Parry;
             bool ownPowerful = Powerful;
             if (parry) { State.RecordSuccessfulParry(); attacker.State.RecordSuccessfulParry(); }
-            State.AddPressure(powerful ? State.PowerfulParryCost : parry ? 45 : 28, Time.time);
-            attacker.State.AddPressure(ownPowerful ? attacker.State.PowerfulParryCost : parry ? 45 : 28, Time.time);
+            State.AddPressure((powerful ? State.PowerfulParryCost : parry ? 45 : 28) * attacker.StrikeStrength, Time.time);
+            attacker.State.AddPressure((ownPowerful ? attacker.State.PowerfulParryCost : parry ? 45 : 28) * StrikeStrength, Time.time);
             State.Deflect(Time.time); attacker.State.Deflect(Time.time);
             State.Recoil(Time.time); attacker.State.Recoil(Time.time);
             float push = powerful || ownPowerful ? 12 : parry ? 7 : 5;
@@ -106,10 +110,11 @@ namespace Parry
         }
         public DefenseResult Defend(CombatGuard attacker, Vector3 incomingDirection, bool allowParry = true, bool powerful = false)
         {
-            if (!Blocking || Disrupted || Vector3.Angle(Facing, -incomingDirection) > 70) return DefenseResult.Hit;
-            if (allowParry && State.CanParry(Time.time))
+            if (!CanDefendAgainst(attacker) || !Blocking || Disrupted || Vector3.Angle(Facing, -incomingDirection) > 70) return DefenseResult.Hit;
+            float strength = attacker != null ? attacker.StrikeStrength : 1;
+            if (allowParry && State.CanParry(Time.time, attacker != null && attacker.Weapon == WeaponKind.Axe ? .5f : 1f))
             {
-                State.Parry(Time.time, powerful);
+                State.Parry(Time.time, powerful, attacker != null && attacker.Weapon == WeaponKind.Axe ? 5 : 1, strength);
                 if (powerful)
                 {
                     PushApart(attacker, incomingDirection);
@@ -127,7 +132,8 @@ namespace Parry
                 sparks.Burst(transform.position + Facing * .65f + Vector3.up * .85f, incomingDirection);
                 return DefenseResult.Parry;
             }
-            State.Block(Time.time, powerful);
+            State.Block(Time.time, powerful, strength);
+            if (attacker != null && attacker.Weapon == WeaponKind.Axe) State.AddPressure(112 * strength, Time.time);
             if (powerful)
             {
                 PushApart(attacker, incomingDirection);
@@ -156,7 +162,7 @@ namespace Parry
             feedback = "BUILD WARMUP: ATTACK / PARRY";
             feedbackUntil = Time.time + 1.2f;
         }
-        public void OnHit() { State.CancelRelaxation(); State.AddPressure(22, Time.time); }
+        public void OnHit(CombatGuard attacker = null) { State.CancelRelaxation(); State.AddPressure((attacker != null && attacker.Weapon == WeaponKind.Axe ? 110 : 22) * (attacker != null ? attacker.StrikeStrength : 1), Time.time); }
         public void ResetCombat()
         {
             State.Reset(); feedbackUntil = 0; wasBroken = false;
@@ -174,12 +180,16 @@ namespace Parry
             warmupBar = DemoArt.Line("Combat warmup", transform, new Color(.25f, .95f, .9f), .055f);
             warmupBackground.sortingOrder = 100; warmupBar.sortingOrder = 101;
             warmupBackground.positionCount = warmupBar.positionCount = 2;
+            chargeBackground = DemoArt.Line("Strike charge background", transform, new Color(.08f, .1f, .12f), .12f);
+            chargeBar = DemoArt.Line("Strike charge", transform, Color.green, .08f);
+            chargeBackground.positionCount = chargeBar.positionCount = 2;
+            chargeBackground.sortingOrder = 100; chargeBar.sortingOrder = 101;
+            chargeBackground.enabled = chargeBar.enabled = false;
             flash = DemoArt.Line("Weapon clash", transform, ParrySparks.ImpactColor(true), .055f);
             flash.enabled = false;
         }
         void Signal(string text, bool parry)
         {
-            GetComponent<CharacterPresentation>()?.Impact(parry);
             feedback = text; feedbackUntil = Time.time + .65f;
             flash.enabled = true; flash.positionCount = 12;
             Vector3 center = transform.position + Facing * .6f + Vector3.up * .85f;
@@ -201,6 +211,23 @@ namespace Parry
             var target = GetComponent<PracticeTarget>();
             bool alive = player != null ? player.IsAlive : target != null && target.IsAlive;
             bool markersVisible = alive && SmokeCloud.Exposure(transform.position) <= .01f;
+            var enemy = GetComponent<EnemyBrain>();
+            AttackCharge charge = player != null ? player.Charge : enemy != null ? enemy.Charge : null;
+            bool charging = player != null ? player.ChargeVisible : enemy != null && enemy.ChargeVisible;
+            chargeBackground.enabled = markersVisible && charging;
+            chargeBar.enabled = chargeBackground.enabled;
+            if (chargeBar.enabled)
+            {
+                Vector3 right = Camera.main.transform.right * .55f;
+                Vector3 center = transform.position + Vector3.up * 2.48f;
+                chargeBackground.SetPosition(0, center - right);
+                chargeBackground.SetPosition(1, center + right);
+                Vector3 start = center - right - Camera.main.transform.forward * .02f;
+                float fill = charge.Meter(Time.time);
+                chargeBar.SetPosition(0, start);
+                chargeBar.SetPosition(1, start + right * 2 * fill);
+                chargeBar.startColor = chargeBar.endColor = Color.Lerp(Color.green, Color.red, fill);
+            }
             background.enabled = markersVisible;
             warmupBackground.enabled = markersVisible;
             warmupBar.enabled = markersVisible && State.Warmup > 0;

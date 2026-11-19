@@ -78,7 +78,7 @@ namespace Parry
         float groupWaitingSince = float.NegativeInfinity;
         static readonly List<EnemyBrain> activeEnemies = new List<EnemyBrain>();
         void OnEnable() { activeEnemies.Add(this); }
-        void OnDisable() { activeEnemies.Remove(this); }
+        void OnDisable() { activeEnemies.Remove(this); attackCharge.Cancel(); }
 
         enum State { Chase, Guard, Windup, Lunge, Recovery, Retreat, Roll }
         State state;
@@ -86,7 +86,21 @@ namespace Parry
         [SerializeField] EnemyBrain opponent;
         Transform TargetTransform => opponent != null ? opponent.transform : player != null ? player.transform : null;
         bool TargetAlive => opponent != null ? opponent.Health.IsAlive : player != null && player.IsAlive;
-        bool TargetThreatening => opponent != null ? opponent.AttackThreatening : player != null && player.AttackThreatening;
+        bool TargetHasAttack => opponent != null ? opponent.AttackThreatening : player != null && player.AttackThreatening;
+        bool TargetAttackReleased => TargetHasAttack && (opponent != null
+            ? opponent.Charge.Released || opponent.ClashPhase == AttackPhase.Active
+            : player.Charge.Released || player.ClashPhase == AttackPhase.Active);
+        bool TargetStrikeImminent => TargetAttackReleased && (opponent != null
+            ? opponent.ClashPhase == AttackPhase.Active || opponent.stateUntil - Time.time <= .1f
+            : player.TimeUntilStrike <= .1f);
+        bool TargetHoldingOpening => opponent == null && player != null
+            && EnemyTactics.ShouldPunishHeldWindup(player.HeldReadyDuration);
+        bool WindupOpening => opponent == null && player != null && !Guard.Disrupted && !TargetAttackReleased
+            && (TargetHoldingOpening || player.AttackThreatening && !player.UnblockableAttack
+                && EnemyTactics.CanPunishWindup(player.TimeUntilStrike,
+                    windup * (Guard.State.Relaxing || Guard.State.GuardTransition ? 2 : 1), .1f * CombatTiming.StrikeDurationMultiplier,
+                    Mathf.Max(nextAttackAt, tactics.AttackBlockedUntil) - Time.time));
+        bool TargetThreatening => TargetHasAttack && !WindupOpening;
         float TargetReach => opponent != null ? opponent.ThreatReach : player != null ? player.ThreatReach : 0;
         bool TargetUnblockable => opponent != null ? opponent.UnblockableAttack : player != null && player.UnblockableAttack && player.AttackThreatening;
         bool TargetPreparingLunge => opponent != null ? opponent.PreparingLunge
@@ -101,6 +115,7 @@ namespace Parry
         public Vector3 AttackFacing => facing;
         public void InterruptAttack()
         {
+            attackCharge.Cancel();
             slashSequence.Reset();
             Guard.State.CompleteStrongAttack(Time.time);
             performingLunge = performingSweep = false;
@@ -125,7 +140,8 @@ namespace Parry
             if (performingSweep) direction = Vector3.ProjectOnPlane(TargetTransform.position - transform.position, Vector3.up).normalized;
             if (!PerformingPowerful) Guard.State.RecordOrdinaryContact();
             if (opponent != null) opponent.ReceiveAttack(amount * (performingSweep ? PowerfulSweep.DamageMultiplier : 1), direction, Guard, PerformingPowerful);
-            else if (player != null) player.ReceiveAttack(amount * (performingSweep ? PowerfulSweep.DamageMultiplier : 1), direction, Guard, PerformingPowerful);
+            else if (player != null) player.ReceiveAttack(amount * (performingSweep ? PowerfulSweep.DamageMultiplier : 1), direction, Guard, PerformingPowerful,
+                performingSweep || CircularAttacks && !PerformingPowerful);
             return true;
         }
         PracticeTarget health;
@@ -137,7 +153,7 @@ namespace Parry
         Vector3 facing = Vector3.back;
         float stateUntil, observedHitTime = float.NegativeInfinity;
         bool wasAlive = true;
-        bool observedPlayerAttack;
+        bool observedPlayerAttack, observedImminentStrike;
         readonly EnemyTactics tactics = new EnemyTactics(() => Random.value);
         readonly HashSet<EnemyBrain> stepReactedEnemies = new HashSet<EnemyBrain>();
         float stepRecoilUntil;
@@ -167,9 +183,21 @@ namespace Parry
         bool CircularAttacks => arena != null && arena.CircularAttacks;
         public float AttackReach => arena != null ? arena.BaseAttackRadius : reach;
         public float ThreatReach => AttackReach + (performingLunge && UnblockableAttack ? lungeDistance : 0);
+        readonly AttackCharge attackCharge = new AttackCharge();
+        public AttackCharge Charge => attackCharge;
+        public bool ChargeVisible => ChargeEnabled && attackCharge.Active && (state == State.Windup || state == State.Lunge
+            || state == State.Recovery && Time.time - lastSwingAt < CurrentActive);
+        public float StrikeStrength => ChargeEnabled && attackCharge.Released ? attackCharge.Strength(Time.time) : 1;
+        bool ChargeEnabled => arena != null ? arena.HoldToWindup : duelArena != null && duelArena.HoldToWindup;
+        float ChargeDuration => player != null ? player.ChargeDuration : AttackCharge.DefaultDuration;
+        float ChargeWindow => player != null ? player.PerfectChargeWindow : AttackCharge.DefaultPerfectWindow;
+        float windupStartedAt, plannedReleaseAt, plannedWindupDuration;
+        Vector3 lastObservedTargetPosition;
+        bool targetMoving;
         float attackWindupMultiplier = 1;
-        float CurrentWindup => (performingLunge ? lungeWindup : performingSweep ? PowerfulSweep.Windup : windup) * attackWindupMultiplier;
-        float CurrentActive => performingLunge ? lungeActiveTime : performingSweep ? PowerfulSweep.ActiveTime : .1f;
+        float MinimumWindup => (performingLunge ? lungeWindup : performingSweep ? PowerfulSweep.Windup : windup) * attackWindupMultiplier;
+        float CurrentWindup => plannedWindupDuration > 0 ? plannedWindupDuration : MinimumWindup;
+        float CurrentActive => CombatTiming.StrikeDurationMultiplier * (performingLunge ? lungeActiveTime : performingSweep ? PowerfulSweep.ActiveTime : .1f);
         float AttackRecovery => performingLunge ? lungeRecovery : performingSweep ? PowerfulSweep.Recovery : recovery * (tactics.FullOffense ? .55f : tactics.Aggressive ? .75f : 1);
         float GuardWait => tactics.FullOffense ? .1f : tactics.Aggressive ? .26f : .65f;
         float AttackDistance => attackDistance * AttackReach / Mathf.Max(.1f, reach);
@@ -210,11 +238,12 @@ namespace Parry
             if (shadow != null) shadow.gameObject.SetActive(health.IsAlive);
             if (!health.IsAlive)
             {
+                attackCharge.Cancel();
                 lungeResponsePrepared = dodgingLunge = lungeParryCommitted = false;
                 Guard.State.CompleteStrongAttack(Time.time);
                 performingLunge = performingSweep = false;
                 wasAlive = false;
-                observedPlayerAttack = false;
+                observedPlayerAttack = observedImminentStrike = false;
                 nextAttackAt = 0;
                 nextRollAt = rollRemaining = 0;
                 slashSequence.Reset();
@@ -240,12 +269,13 @@ namespace Parry
             }
             if (!TargetAlive)
             {
+                attackCharge.Cancel();
                 lungeResponsePrepared = dodgingLunge = lungeParryCommitted = false;
                 Guard.State.CompleteStrongAttack(Time.time);
                 performingLunge = performingSweep = false;
                 state = State.Chase;
                 comboRemaining = 0;
-                observedPlayerAttack = false;
+                observedPlayerAttack = observedImminentStrike = false;
                 slashSequence.Reset();
                 tactics.Reset();
                 Guard.Tick(false, facing);
@@ -253,6 +283,7 @@ namespace Parry
             }
             if (health.LastHitTime > observedHitTime)
             {
+                attackCharge.Cancel();
                 slashSequence.Reset();
                 Guard.State.CompleteStrongAttack(Time.time);
                 performingLunge = performingSweep = false;
@@ -262,6 +293,8 @@ namespace Parry
                 stateUntil = Time.time + stunDuration;
             }
             Vector3 delta = Vector3.ProjectOnPlane(TargetTransform.position - transform.position, Vector3.up);
+            targetMoving = (TargetTransform.position - lastObservedTargetPosition).magnitude / Mathf.Max(.001f, Time.deltaTime) > 2;
+            lastObservedTargetPosition = TargetTransform.position;
             UpdateRestStance(delta.magnitude);
             if (Time.time < stepRecoilUntil && (state == State.Chase || state == State.Guard || state == State.Retreat))
             {
@@ -282,7 +315,7 @@ namespace Parry
                 return;
             }
             if (!TargetPreparingLunge && !TargetUnblockable) lungeResponsePrepared = lungeParryCommitted = false;
-            if (TargetPreparingLunge && delta.magnitude <= TargetReach + lungeDistance + 1 && HasLineOfSight(delta)
+            if (TargetPreparingLunge && !TargetHoldingOpening && delta.magnitude <= TargetReach + lungeDistance + 1 && HasLineOfSight(delta)
                 && (lungeResponsePrepared || Vector3.Angle(TargetAttackHeading, -delta) <= 60)
                 && !Guard.Disrupted && state != State.Lunge && (state != State.Recovery || Time.time >= stateUntil))
             {
@@ -295,8 +328,12 @@ namespace Parry
             if (delta.sqrMagnitude > .001f && state == State.Guard)
                 facing = Vector3.RotateTowards(facing, delta.normalized, 4 * Time.deltaTime, 0);
             UpdateTactics(delta);
-            bool newAttack = TargetThreatening && !observedPlayerAttack;
+            // A held windup and the imminent strike are separate defensive cues;
+            // refresh parry timing rather than relying on the initial raised guard.
+            bool newAttack = TargetThreatening && !observedPlayerAttack
+                || TargetStrikeImminent && !observedImminentStrike;
             observedPlayerAttack = TargetThreatening;
+            observedImminentStrike = TargetStrikeImminent;
             if (TargetUnblockable && lungeResponsePrepared)
             {
                 ReactToLungeRelease(TargetGuard, TargetAttackHeading);
@@ -307,8 +344,10 @@ namespace Parry
                 Guard.Tick(CanGuard, facing);
                 return;
             }
-            if (!tactics.ExploitingWeakness && !TargetUnblockable && state != State.Windup && TargetThreatening
-                && delta.magnitude <= TargetReach + .3f && HasLineOfSight(delta))
+            bool defending = CanGuard && !TargetUnblockable && TargetThreatening
+                && (TargetAttackReleased || !tactics.ExploitingWeakness && state != State.Windup)
+                && delta.magnitude <= TargetReach + .3f && HasLineOfSight(delta);
+            if (defending)
                 PrepareDefense(delta, newAttack);
             Guard.Tick(CanGuard && !(state == State.Retreat && Guard.State.Relaxing) && state != State.Windup
                 && (state != State.Recovery || Time.time >= stateUntil), facing);
@@ -322,13 +361,25 @@ namespace Parry
                 comboRemaining = 0;
                 return;
             }
+            // Keep the chosen defense instead of immediately replacing it with a
+            // group attack, flank or aggressive follow-up in this same frame.
+            if (defending) return;
             if (TryCornerRoll(delta)) return;
+            if (WindupOpening && !tactics.Retreating && Guard.State.CanAttack(Time.time)
+                && (state == State.Chase || state == State.Guard || state == State.Recovery && Time.time >= stateUntil)
+                && Time.time >= Mathf.Max(nextAttackAt, tactics.AttackBlockedUntil)
+                && delta.magnitude <= AttackDistance && HasLineOfSight(delta))
+            {
+                // Use a quick ordinary strike; a charged special would waste the opening.
+                BeginWindup(true, groupAttack: true);
+                if (state == State.Windup) { DrawWarning(); return; }
+            }
             bool alreadyWindingUp = state == State.Windup;
-            bool waitingForGroup = !ProtectingAlly && TryGroupAttack();
+            bool waitingForGroup = !tactics.Retreating && !ProtectingAlly && TryGroupAttack();
             if (!alreadyWindingUp && state == State.Windup) { DrawWarning(); return; }
-            if (!ProtectingAlly && TryFlankPlayer(delta)) return;
+            if (!tactics.Retreating && !ProtectingAlly && TryFlankPlayer(delta)) return;
             if (waitingForGroup) return;
-            if (TryApproachRoll(delta)) return;
+            if (!tactics.Retreating && TryApproachRoll(delta)) return;
             if (tactics.Retreating && state != State.Retreat && (state != State.Windup || tactics.UrgentRetreat && !PerformingPowerful)
                 && (state != State.Recovery || Time.time >= stateUntil)) BeginRetreat();
             if (state == State.Retreat)
@@ -369,6 +420,20 @@ namespace Parry
             }
             else if (state == State.Windup)
             {
+                if (ChargeEnabled && attackCharge.Active)
+                {
+                    // Reconsider a slow windup if an incoming strike makes waiting unsafe.
+                    if ((TargetThreatening || TargetUnblockable || TargetHoldingOpening)
+                        && delta.magnitude <= TargetReach + .5f && Time.time < plannedReleaseAt)
+                    {
+                        plannedReleaseAt = Time.time;
+                        stateUntil = Mathf.Max(Time.time, windupStartedAt + MinimumWindup);
+                        plannedWindupDuration = stateUntil - windupStartedAt;
+                    }
+                    Guard.State.RecordCombat(Time.time);
+                    if (!attackCharge.Released && Time.time >= plannedReleaseAt)
+                        attackCharge.Release(plannedReleaseAt);
+                }
                 DrawWarning();
                 if (!PerformingPowerful)
                 {
@@ -399,7 +464,7 @@ namespace Parry
                     if (HasLineOfSight(delta))
                         AttackTarget(damage, CircularAttacks && delta.sqrMagnitude > .001f ? delta.normalized : facing);
                     state = State.Recovery;
-                    stateUntil = Time.time + AttackRecovery;
+                    stateUntil = Time.time + AttackRecovery + CurrentActive - .1f;
                 }
             }
             else if (Time.time >= stateUntil)
@@ -464,6 +529,8 @@ namespace Parry
             performingLunge = powerful && !performingSweep;
             if (!performingLunge && targetDelta.magnitude > AttackReach) { state = State.Chase; return; }
             attackWindupMultiplier = Guard.State.ExitRelaxationForAttack();
+            plannedWindupDuration = 0;
+            attackCharge.Cancel();
             if (!PerformingPowerful && !Guard.State.TrySpendForAttack(attackPressure, Time.time))
             {
                 BeginGuard();
@@ -472,6 +539,18 @@ namespace Parry
             stepReactedEnemies.Clear();
             slashSequence.Begin(Time.time, !PerformingPowerful);
             state = State.Windup;
+            windupStartedAt = Time.time;
+            if (ChargeEnabled)
+            {
+                attackCharge.Begin(Time.time, ChargeDuration, ChargeWindow,
+                    player != null ? player.SustainedChargeStrength : 2,
+                    player != null ? player.PerfectChargeStrength : 3);
+                float releaseDelay = EnemyTactics.ChooseChargeRelease(MinimumWindup, ChargeDuration, ChargeWindow,
+                    TargetThreatening || tactics.FullOffense || groupAttack, TargetGuard.Broken, TargetHoldingOpening,
+                    TargetGuard.Blocking, Guard.Pressure, targetMoving);
+                plannedReleaseAt = Time.time + releaseDelay;
+                plannedWindupDuration = Mathf.Max(MinimumWindup, releaseDelay);
+            }
             stateUntil = Time.time + CurrentWindup;
             if (!PerformingPowerful) Guard.AnnounceAttack(CurrentWindup, AttackReach);
             else { nextLungeAt = Time.time + lungeCooldown; comboRemaining = 0; }
@@ -531,18 +610,18 @@ namespace Parry
                 }
                 return;
             }
-            float elapsed = Mathf.Min(dt, lungeActiveTime - lungeElapsed);
+            float elapsed = Mathf.Min(dt, CurrentActive - lungeElapsed);
             // Small movement steps also test the blade along its path, avoiding skipped hits.
-            int steps = Mathf.Max(1, Mathf.CeilToInt(lungeDistance * elapsed / lungeActiveTime / .15f));
+            int steps = Mathf.Max(1, Mathf.CeilToInt(lungeDistance * elapsed / CurrentActive / .15f));
             for (int i = 0; i < steps && state == State.Lunge && !Guard.Disrupted; i++)
             {
-                MoveAttackStep(lungeDistance * elapsed / lungeActiveTime / steps, true);
+                MoveAttackStep(lungeDistance * elapsed / CurrentActive / steps, true);
                 if (!lungeHit && HasLineOfSight(TargetTransform.position - transform.position))
                     lungeHit = AttackTarget(damage, facing);
             }
             lungeElapsed += elapsed;
             if (state != State.Lunge) return;
-            if (Guard.Disrupted || lungeElapsed >= lungeActiveTime)
+            if (Guard.Disrupted || lungeElapsed >= CurrentActive)
             {
                 Guard.State.CompleteStrongAttack(Time.time);
                 state = State.Recovery;
@@ -707,6 +786,7 @@ namespace Parry
 
         void BeginGuard()
         {
+            attackCharge.Cancel();
             Guard.State.CompleteStrongAttack(Time.time);
             performingLunge = performingSweep = false;
             state = State.Guard;
@@ -722,7 +802,10 @@ namespace Parry
             if (newAttack) Guard.State.SetBlocking(false, Time.time);
             if (emergency)
             {
+                attackCharge.Cancel();
                 slashSequence.Reset();
+                Guard.State.CompleteStrongAttack(Time.time);
+                performingLunge = performingSweep = false;
                 Guard.State.TryEmergencyGuard(emergencyGuardPressure, Time.time);
                 state = State.Guard;
                 stateUntil = Time.time + GuardWait;
@@ -743,8 +826,10 @@ namespace Parry
             LungeDodgeDefense caught = caughtLungeDodge
                 ? LungeDefenseRules.Caught(Random.value, caughtDodgeParryChance, caughtDodgeBlockChance)
                 : LungeDodgeDefense.Hit;
-            bool newAttack = TargetThreatening && !observedPlayerAttack;
+            bool newAttack = TargetThreatening && !observedPlayerAttack
+                || TargetStrikeImminent && !observedImminentStrike;
             if (TargetThreatening) observedPlayerAttack = true;
+            if (TargetStrikeImminent) observedImminentStrike = true;
             if (caughtLungeDodge)
             {
                 facing = -direction;
@@ -758,6 +843,7 @@ namespace Parry
                 caughtLungeDodge ? caught == LungeDodgeDefense.Parry : unblockable && lungeParryCommitted || Random.value < parryChance, unblockable);
             if (defense != DefenseResult.Hit)
             {
+                attackCharge.Cancel();
                 slashSequence.Reset();
                 comboRemaining = 0;
                 if (defense == DefenseResult.Parry)
@@ -775,6 +861,7 @@ namespace Parry
                 if (Guard.Disrupted) { state = State.Recovery; warning.enabled = false; }
                 return;
             }
+            attackCharge.Cancel();
             Guard.State.CompleteStrongAttack(Time.time);
             performingLunge = performingSweep = false;
             bool concentrationBroken = Guard.Broken;
@@ -782,7 +869,7 @@ namespace Parry
             health.TakeHit(damage, direction);
             if ((concentrationBroken || unblockable) && health.Health < previousHealth)
                 blood.Burst(transform.position + Vector3.up * .8f, direction);
-            Guard.OnHit();
+            Guard.OnHit(attacker);
             Guard.State.SetBlocking(false, Time.time);
             state = State.Recovery;
             stateUntil = Time.time + stunDuration;
@@ -792,7 +879,9 @@ namespace Parry
 
         void LateUpdate()
         {
-            float prepare = state == State.Windup ? 1 - Mathf.Clamp01((stateUntil - Time.time) / Mathf.Max(.001f, CurrentWindup)) : 0;
+            float prepare = state == State.Windup ? ChargeEnabled
+                ? Mathf.Clamp01((Time.time - windupStartedAt) / Mathf.Max(.001f, MinimumWindup))
+                : 1 - Mathf.Clamp01((stateUntil - Time.time) / Mathf.Max(.001f, CurrentWindup)) : 0;
             float recoveryDuration = AttackRecovery;
             float swing = state == State.Lunge ? Mathf.Clamp01(lungeElapsed / CurrentActive)
                 : state == State.Recovery && Time.time - lastSwingAt < recoveryDuration
@@ -894,7 +983,11 @@ namespace Parry
                         }
                     }
                 // Match impact times even when leaving relaxation gives different windup lengths.
-                foreach (var ally in attackers) ally.stateUntil = strikeAt;
+                foreach (var ally in attackers)
+                {
+                    ally.stateUntil = strikeAt;
+                    ally.plannedWindupDuration = strikeAt - ally.windupStartedAt;
+                }
                 leader.groupWaitingSince = float.NegativeInfinity;
                 return false;
             }
@@ -948,6 +1041,7 @@ namespace Parry
 
         void BeginRetreat()
         {
+            attackCharge.Cancel();
             state = State.Retreat;
             lastSwingAt = float.NegativeInfinity;
             warning.enabled = false;

@@ -97,7 +97,7 @@ namespace Parry
             attacksBlockedUntil = Math.Max(attacksBlockedUntil, now + Math.Max(0, duration));
         public bool Broken(float now) => now < brokenUntil;
         public bool Disrupted(float now) => Broken(now) || now < recoilUntil;
-        public bool CanParry(float now) => Blocking && now < parryUntil && !Disrupted(now);
+        public bool CanParry(float now, float windowScale = 1) => Blocking && now < guardRaisedAt + (parryUntil - guardRaisedAt) * windowScale && !Disrupted(now);
         public const float EarlyGuardGrace = .2f;
         bool parryArmed, anticipatedAttack;
         float guardRaisedAt;
@@ -156,17 +156,17 @@ namespace Parry
             Blocking = false;
             CancelRelaxation();
         }
-        public void Block(float now, bool powerful = false)
+        public void Block(float now, bool powerful = false, float incomingStrength = 1)
         {
-            AddPressure(28, now);
+            AddPressure(28 * incomingStrength, now);
             if (powerful) BreakBalance(now);
         }
-        public void Parry(float now, bool powerful = false)
+        public void Parry(float now, bool powerful = false, float ordinaryCostMultiplier = 1, float incomingStrength = 1)
         {
             RecordSuccessfulParry();
             Deflect(now);
             // A timed defense spends endurance but cannot break the defender's balance.
-            Pressure = Math.Min(Maximum, Pressure + NormalizeCost(powerful ? PowerfulParryCost : 14));
+            Pressure = Math.Min(Maximum, Pressure + NormalizeCost((powerful ? PowerfulParryCost : 14 * ordinaryCostMultiplier) * incomingStrength));
         }
         public void Deflect(float now)
         {

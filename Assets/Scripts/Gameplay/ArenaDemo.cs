@@ -13,6 +13,9 @@ namespace Parry
         [SerializeField] Camera view;
         [SerializeField] Volume feedbackVolume;
         [Header("Combat settings")]
+        [Tooltip("Hold attack to wind up, release to strike; guard cancels the windup. Disable for legacy controls.")]
+        [SerializeField] bool holdToWindup = true;
+        public bool HoldToWindup { get => holdToWindup; set => holdToWindup = value; }
         [Tooltip("Show attack range indicators for the player and enemies.")]
         [SerializeField] bool showAttackRangeIndicators;
         public bool ShowAttackRangeIndicators { get => showAttackRangeIndicators; set => showAttackRangeIndicators = value; }
@@ -43,6 +46,9 @@ namespace Parry
         GUIStyle controlsLabel;
         void Start()
         {
+            var armory = new GameObject("Starting weapon selection room");
+            armory.transform.SetParent(transform, false);
+            armory.AddComponent<WeaponSelectionRoom>().Initialize(player);
             PracticeTarget.ResetCounter();
             CombatAudio.Initialize(transform);
             cameraPosition = view.transform.position;
@@ -272,11 +278,12 @@ namespace Parry
                 controlsLabel = new GUIStyle(GUI.skin.label) { fontSize = 12 };
                 controlsLabel.normal.textColor = new Color(.85f, .88f, .83f);
             }
-            GUI.Box(new Rect(12, 12, 355, 88), GUIContent.none);
+            GUI.Box(new Rect(12, 12, 355, 106), GUIContent.none);
             GUI.Label(new Rect(22, 19, 335, 18), "WASD / Arrows: move  •  Mouse: aim  •  LMB / J: attack", controlsLabel);
             GUI.Label(new Rect(22, 37, 335, 18), "Hold RMB / K / LB: block  •  Tap before impact: parry", controlsLabel);
             GUI.Label(new Rect(22, 55, 335, 18), "Space: dodge  •  R: revive / heal  •  Scroll: zoom", controlsLabel);
             GUI.Label(new Rect(22, 73, 335, 18), "1: slash  •  2: lunge  •  3: sweep  •  Alt: relax", controlsLabel);
+            GUI.Label(new Rect(22, 91, 335, 18), "Hold Ctrl / Cmd: crouch (sweeps still hit)", controlsLabel);
             GUI.Box(new Rect(12, 194, 420, 28), "Tab / MMB: target lock  •  Q / E: switch  •  Esc: release");
             GUI.Label(new Rect(22, 224, 500, 24), "Lunge feint: aim before release (hold Shift to override target lock)", controlsLabel);
         }

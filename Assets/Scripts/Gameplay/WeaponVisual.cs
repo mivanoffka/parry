@@ -11,7 +11,31 @@ namespace Parry
         SpriteRenderer blade;
         float relaxationBlend;
         public float RelaxationBlend => relaxationBlend;
-        static Sprite sword;
+        static Sprite sword, axe, fist;
+        public void SetKind(WeaponKind kind)
+        {
+            if (axe == null)
+            {
+                var texture = new Texture2D(32, 64) { filterMode = FilterMode.Point };
+                var pixels = new Color[32 * 64];
+                for (int y = 0; y < 64; y++) for (int x = 0; x < 32; x++)
+                {
+                    Color c = Color.clear;
+                    if (x >= 14 && x <= 17 && y >= 3 && y < 58) c = new Color(.45f, .26f, .12f);
+                    if (y >= 42 && y <= 59 && x >= 8 && x <= 28 && (x < 23 || y >= 45 && y <= 56))
+                        c = x > 23 ? new Color(.9f, .95f, 1) : new Color(.4f, .55f, .62f);
+                    pixels[y * 32 + x] = c;
+                }
+                texture.SetPixels(pixels); texture.Apply();
+                axe = Sprite.Create(texture, new Rect(0, 0, 32, 64), new Vector2(.5f, .16f), 48);
+                var hand = new Texture2D(8, 8) { filterMode = FilterMode.Point };
+                var skin = new Color[64];
+                for (int i = 0; i < skin.Length; i++) skin[i] = new Color(.85f, .65f, .45f);
+                hand.SetPixels(skin); hand.Apply();
+                fist = Sprite.Create(hand, new Rect(0, 0, 8, 8), new Vector2(.5f, 0), 32);
+            }
+            blade.sprite = kind == WeaponKind.Axe ? axe : kind == WeaponKind.Fists ? fist : sword;
+        }
         static Material chargeMaterial;
         LineRenderer chargeHalo, chargeCore, glintHorizontal, glintVertical;
         Light chargeLight;
@@ -171,6 +195,13 @@ namespace Parry
                 float extension = Mathf.Lerp(lunge ? .55f : .7f, 1, release);
                 Vector3 tip = transform.parent.position + Vector3.up * .8f
                     + attackDirection * Mathf.Max(.5f, reach * extension) + drawBack;
+                if (!lunge)
+                {
+                    // Hold the blade above the drawn-back hand, then lower and extend it into the cut.
+                    // A ground-plane tip at full anticipation makes the sword lie horizontally.
+                    Vector3 raisedTip = grip + attackDirection * .25f + Vector3.up * 1.1f;
+                    tip = Vector3.Lerp(tip, raisedTip, tension);
+                }
                 Vector3 projectedBlade = Vector3.ProjectOnPlane(tip - grip, camera.transform.forward);
                 float attackAngle = Mathf.Atan2(-Vector3.Dot(projectedBlade, right),
                     Vector3.Dot(projectedBlade, camera.transform.up)) * Mathf.Rad2Deg;

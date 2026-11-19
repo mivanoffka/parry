@@ -7,6 +7,66 @@ namespace Parry.Editor
 {
     public static class RoomEncounterVerification
     {
+        public static void RunArmoryCorridor()
+        {
+            EditorSceneManager.OpenScene("Assets/Scenes/0.unity");
+            int stage = 0;
+            double started = EditorApplication.timeSinceStartup;
+            EditorApplication.update += CheckArmory;
+            void CheckArmory()
+            {
+                if (!EditorApplication.isPlaying || Time.timeSinceLevelLoad < .2f) return;
+                try
+                {
+                    if (EditorApplication.timeSinceStartup - started > 60)
+                        throw new InvalidOperationException("Armory corridor verification timed out.");
+                    var rooms = UnityEngine.Object.FindAnyObjectByType<RoomEncounter>();
+                    var data = new SerializedObject(rooms);
+                    var player = (PlayerMotor)data.FindProperty("player").objectReferenceValue;
+                    var carrier = (Transform)data.FindProperty("keyCarrier").objectReferenceValue;
+                    var guard = carrier.GetComponent<EnemyBrain>();
+                    if (stage == 0)
+                    {
+                        if (guard.enabled || player.transform.position.z > -18)
+                            throw new InvalidOperationException("Player must start in the armory with an inactive arena guard.");
+                        Physics.SyncTransforms();
+                        foreach (float z in new[] { -18f, -16f, -14f, -12f, -10f })
+                        {
+                            if (!Physics.Raycast(new Vector3(0, .2f, z), Vector3.down, .5f, ~0, QueryTriggerInteraction.Ignore))
+                                throw new InvalidOperationException("Corridor floor has a gap at " + z);
+                        }
+                        if (Physics.Raycast(new Vector3(0, .7f, -19), Vector3.forward, 10, ~0, QueryTriggerInteraction.Ignore))
+                            throw new InvalidOperationException("Corridor doorway is blocked.");
+                        if (!Physics.Raycast(new Vector3(0, .7f, -14), Vector3.right, 2.1f, ~0, QueryTriggerInteraction.Ignore)
+                            || !Physics.Raycast(new Vector3(0, .7f, -14), Vector3.left, 2.1f, ~0, QueryTriggerInteraction.Ignore))
+                            throw new InvalidOperationException("Corridor side walls are missing.");
+                        player.enabled = false;
+                        Move(player, new Vector3(0, 0, -11));
+                    }
+                    else if (stage == 1)
+                    {
+                        if (guard.enabled) throw new InvalidOperationException("Corridor activated arena guard too early.");
+                        Move(player, new Vector3(0, 0, -9));
+                    }
+                    else
+                    {
+                        if (!guard.enabled) throw new InvalidOperationException("Entering arena did not activate its guard.");
+                        Debug.Log("PARRY ARMORY CORRIDOR AND ARENA ACTIVATION PASSED");
+                        EditorApplication.update -= CheckArmory;
+                        EditorApplication.Exit(0);
+                    }
+                    stage++;
+                }
+                catch (Exception error)
+                {
+                    Debug.LogException(error);
+                    EditorApplication.update -= CheckArmory;
+                    EditorApplication.Exit(1);
+                }
+            }
+            EditorApplication.EnterPlaymode();
+        }
+
         public static void RunSpawnInside()
         {
             EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity");

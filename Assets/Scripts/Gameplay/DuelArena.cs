@@ -11,6 +11,9 @@ namespace Parry
         [SerializeField] EnemyBrain second;
         [SerializeField] Camera view;
         [Header("Combat settings")]
+        [Tooltip("Enable charge strength and tactical quick/charged attacks for both duelists.")]
+        [SerializeField] bool holdToWindup = true;
+        public bool HoldToWindup { get => holdToWindup; set => holdToWindup = value; }
         [Tooltip("Show attack range indicators for both fighters.")]
         [SerializeField] bool showAttackRangeIndicators;
         public bool ShowAttackRangeIndicators { get => showAttackRangeIndicators; set => showAttackRangeIndicators = value; }

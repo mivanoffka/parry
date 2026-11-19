@@ -9,17 +9,27 @@ namespace Parry
         [SerializeField] Transform keyCarrier;
         [SerializeField] Transform[] secondRoomEnemies;
         [SerializeField] GameObject lockedDoor;
+        [SerializeField] Bounds firstRoomBounds = new Bounds(new Vector3(0, 1, 0), new Vector3(23, 4, 19));
         [SerializeField] Bounds secondRoomBounds = new Bounds(new Vector3(32, 1, 0), new Vector3(23, 4, 19));
         PracticeTarget carrierHealth;
         Transform droppedKey;
-        bool keyDropped, hasKey, doorOpened, secondRoomEntered;
+        bool keyDropped, hasKey, doorOpened, firstRoomEntered, secondRoomEntered;
 
         void Start()
         {
             carrierHealth = keyCarrier.GetComponent<PracticeTarget>();
+            keyCarrier.GetComponent<EnemyBrain>().enabled = false;
             foreach (var enemy in secondRoomEnemies)
                 enemy.GetComponent<EnemyBrain>().enabled = false;
+            ActivateFirstRoom();
             ActivateSecondRoom();
+        }
+
+        void ActivateFirstRoom()
+        {
+            if (firstRoomEntered || !player.IsAlive || !firstRoomBounds.Contains(player.transform.position)) return;
+            firstRoomEntered = true;
+            keyCarrier.GetComponent<EnemyBrain>().enabled = true;
         }
 
         void ActivateSecondRoom()
@@ -52,6 +62,7 @@ namespace Parry
                 doorOpened = true;
                 lockedDoor.SetActive(false);
             }
+            ActivateFirstRoom();
             ActivateSecondRoom();
         }
 
@@ -89,6 +100,7 @@ namespace Parry
                 objective = alive > 0 ? "Room 2: enemies remaining — " + alive
                     : carrierHealth.IsAlive ? "Room 2 cleared" : "Both rooms cleared!";
             }
+            else if (!firstRoomEntered) objective = "Choose a weapon, then follow the corridor into room 1";
             else if (!keyDropped) objective = "Room 1: defeat the guard to get the key";
             else if (!hasKey) objective = "Pick up the golden key dropped by the guard";
             else if (!doorOpened) objective = "Key acquired: approach the door to room 2";

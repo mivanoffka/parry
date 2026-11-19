@@ -23,6 +23,19 @@ namespace Parry
     // Periodic random rest decisions depend on current concentration; chosen rests have hysteresis.
     public sealed class EnemyTactics
     {
+        // Prefer speed under threat, pressure or a moving opponent; charge only with a useful opening.
+        public static float ChooseChargeRelease(float minimumWindup, float chargeDuration, float perfectWindow,
+            bool threatened, bool targetOpen, bool targetHolding, bool targetBlocking, float pressure, bool movingTarget)
+        {
+            float quick = Math.Min(minimumWindup, chargeDuration * .25f);
+            if (threatened || targetHolding || pressure >= 65 || movingTarget && !targetOpen) return quick;
+            if (targetOpen || targetBlocking) return chargeDuration + perfectWindow * .5f;
+            return Math.Min(minimumWindup, chargeDuration * .65f);
+        }
+        public const float HeldWindupReactionTime = .2f;
+        public static bool ShouldPunishHeldWindup(float heldReadyDuration) => heldReadyDuration >= HeldWindupReactionTime;
+        public static bool CanPunishWindup(float timeUntilStrike, float ownWindup, float ownActiveTime,
+            float attackDelay = 0) => timeUntilStrike > Math.Max(0, attackDelay) + ownWindup + ownActiveTime + .12f;
         public const float OpponentWeaknessThreshold = 70;
         public bool ExploitingWeakness { get; private set; }
         public bool FullOffense { get; private set; }
