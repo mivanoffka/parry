@@ -242,7 +242,8 @@ namespace Parry
         void LateUpdate()
         {
             if (player == null) return;
-            if (Mouse.current != null && Application.isFocused)
+            bool inSmoke = player.IsAlive && SmokeCloud.Exposure(player.transform.position) > .01f;
+            if (!inSmoke && Mouse.current != null && Application.isFocused)
             {
                 float scroll = Mouse.current.scroll.ReadValue().y;
                 // Input System 1.20 normalizes wheel ticks unless native ranges are requested.
@@ -253,7 +254,7 @@ namespace Parry
                     - scroll * .25f, 3f, 14f);
             }
             currentCameraSize = Mathf.SmoothDamp(currentCameraSize,
-                targetCameraSize, ref zoomVelocity, .4f);
+                inSmoke ? Mathf.Min(targetCameraSize, 3.5f) : targetCameraSize, ref zoomVelocity, .4f);
             // Perspective cameras zoom by changing follow distance; orthographic cameras change size.
             float pitch = CameraZoom.Pitch(currentCameraSize, initialCameraSize, 14,
                 normalCameraPitch, closeZoomPitch, distantZoomPitch);
@@ -284,8 +285,8 @@ namespace Parry
             GUI.Label(new Rect(22, 55, 335, 18), "Space: dodge  •  R: revive / heal  •  Scroll: zoom", controlsLabel);
             GUI.Label(new Rect(22, 73, 335, 18), "1: slash  •  2: lunge  •  3: sweep  •  Alt: relax", controlsLabel);
             GUI.Label(new Rect(22, 91, 335, 18), "Hold Ctrl / Cmd: crouch (sweeps still hit)", controlsLabel);
-            GUI.Box(new Rect(12, 194, 420, 28), "Tab / MMB: target lock  •  Q / E: switch  •  Esc: release");
-            GUI.Label(new Rect(22, 224, 500, 24), "Lunge feint: aim before release (hold Shift to override target lock)", controlsLabel);
+            GUI.Box(new Rect(12, 244, 420, 28), "Tab: target lock  •  Q / E: switch  •  Esc: release");
+            GUI.Label(new Rect(22, 274, 500, 24), "Lunge feint: aim before release (hold Shift to override target lock)", controlsLabel);
         }
     }
 }

@@ -137,6 +137,13 @@ namespace Parry
             chargeLight.enabled = false;
         }
 
+        // Sample an unwrapped turn so a full revolution cannot collapse to the shortest arc.
+        public static Vector3 SpinFacing(Vector3 facing, float swing, int direction)
+        {
+            float progress = Mathf.SmoothStep(0, 1, Mathf.Clamp01(swing));
+            return Quaternion.AngleAxis(360 * progress * direction, Vector3.up) * facing;
+        }
+
         public void Pose(Vector3 facing, bool visible, bool blocking, bool broken, float swing = -1, float windup = 0,
             float reach = 2.5f, float halfAngle = 35, float recovery = 0, bool circular = false, bool lunge = false, bool powerful = false, bool thrustStance = false, bool relaxing = false, int slashDirection = 1)
         {
@@ -178,6 +185,7 @@ namespace Parry
             {
                 Vector3 readyPosition = transform.position;
                 Quaternion readyRotation = transform.rotation;
+                bool fullTurn = !lunge && (circular || halfAngle >= 180);
                 float sector = circular ? 180 : halfAngle;
                 // Settle into the drawn-back pose early, then briefly hold it as a warning.
                 float anticipation = Mathf.SmoothStep(0, 1, Mathf.Clamp01(windup / .78f));
@@ -185,14 +193,16 @@ namespace Parry
                 // Rapid release followed by a slower follow-through, rather than an even sweep.
                 float release = 1 - Mathf.Pow(1 - t, 3);
                 float turn = Mathf.Lerp(-sector - (circular ? 0 : 28), sector + (circular ? 0 : 12), release);
+                if (fullTurn) turn = 360 * Mathf.SmoothStep(0, 1, t);
                 if (!lunge) turn *= slashDirection;
                 Vector3 attackDirection = lunge ? facing : Quaternion.AngleAxis(turn, Vector3.up) * facing;
-                float tension = swing < 0 ? 1 : 1 - release;
+                float tension = swing < 0 ? 1 : fullTurn ? 0 : 1 - release;
                 Vector3 drawBack = -facing * (powerful ? .4f : .22f) * tension
                     + Vector3.up * (lunge ? .04f : .16f) * tension;
                 Vector3 grip = transform.parent.position + Vector3.up * .8f
-                    + attackDirection * .4f + Vector3.Cross(Vector3.up, facing) * .16f + drawBack;
-                float extension = Mathf.Lerp(lunge ? .55f : .7f, 1, release);
+                    + attackDirection * (fullTurn ? .6f : .4f)
+                    + Vector3.Cross(Vector3.up, fullTurn ? attackDirection : facing) * .16f + drawBack;
+                float extension = fullTurn ? 1 : Mathf.Lerp(lunge ? .55f : .7f, 1, release);
                 Vector3 tip = transform.parent.position + Vector3.up * .8f
                     + attackDirection * Mathf.Max(.5f, reach * extension) + drawBack;
                 if (!lunge)

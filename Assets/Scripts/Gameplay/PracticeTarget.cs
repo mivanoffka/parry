@@ -92,7 +92,7 @@ namespace Parry
                 visual.color = flash > 0 ? Color.white : baseColor;
                 visual.transform.rotation = Camera.main.transform.rotation;
             }
-            healthBar.enabled = SmokeCloud.Exposure(transform.position) <= .01f;
+            healthBar.enabled = !SmokeCloud.PlayerObscured && SmokeCloud.Exposure(transform.position) <= .01f;
             healthBar.SetPosition(0, transform.position + new Vector3(-.4f, 1.8f, 0));
             healthBar.SetPosition(1, transform.position + new Vector3(-.4f + .8f * health / maxHealth, 1.8f, 0));
         }

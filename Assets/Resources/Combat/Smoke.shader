@@ -33,7 +33,13 @@ Shader "Parry/Smoke"
             }
             half4 Frag(Varyings input) : SV_Target
             {
-                half glow = pow(saturate(1 - length(input.uv * 2 - 1)), 1.3);
+                float2 p = input.uv * 2 - 1;
+                // Soft overlapping lobes give each rotated, stretched puff an uneven outline.
+                float angle = atan2(p.y, p.x);
+                float edge = .83 + .10 * sin(angle * 3 + .6) + .06 * sin(angle * 5 - 1.2);
+                float billows = sin(p.x * 8 + p.y * 3) * sin(p.y * 7 - p.x * 2);
+                half glow = pow(saturate(1 - length(p) / edge), 1.15);
+                glow *= .88 + .12 * billows;
                 return half4(input.color.rgb, input.color.a * glow);
             }
             ENDHLSL

@@ -163,6 +163,8 @@ namespace Parry
         float lastSwingAt = float.NegativeInfinity;
         float nextAttackAt;
         float nextRollAt, rollRemaining;
+        bool rollKnockedDown;
+        Vector3 rollSlide;
         float currentRollSpeed;
         bool closingRoll;
         Vector3 rollDirection;
@@ -238,6 +240,8 @@ namespace Parry
             if (shadow != null) shadow.gameObject.SetActive(health.IsAlive);
             if (!health.IsAlive)
             {
+                rollKnockedDown = false;
+                rollSlide = Vector3.zero;
                 attackCharge.Cancel();
                 lungeResponsePrepared = dodgingLunge = lungeParryCommitted = false;
                 Guard.State.CompleteStrongAttack(Time.time);
@@ -267,6 +271,37 @@ namespace Parry
                 state = State.Recovery;
                 stateUntil = Time.time + .8f;
             }
+            if (rollKnockedDown)
+            {
+                Guard.Tick(false, facing);
+                if (Guard.Disrupted)
+                {
+                    Vector3 next = Vector3.MoveTowards(rollSlide, Vector3.zero, 18 * Time.deltaTime);
+                    health.Move((rollSlide + next) * .5f * Time.deltaTime);
+                    rollSlide = next;
+                    return;
+                }
+                rollKnockedDown = false;
+            }
+            if (SmokeCloud.Exposure(transform.position) > .01f && !Rolling)
+            {
+                InterruptAttack();
+                Guard.Tick(false, facing);
+                if (!Guard.Disrupted)
+                {
+                    if (Time.time >= nextSmokeEscapeAt)
+                    {
+                        smokeEscape = SmokeCloud.EscapeDirection(transform.position);
+                        nextSmokeEscapeAt = Time.time + .3f;
+                    }
+                    if (smokeEscape.sqrMagnitude > .01f)
+                    {
+                        facing = smokeEscape;
+                        MoveWithSteering(smokeEscape, moveSpeed * Time.deltaTime, Vector3.zero);
+                    }
+                }
+                return;
+            }
             if (!TargetAlive)
             {
                 attackCharge.Cancel();
@@ -291,6 +326,13 @@ namespace Parry
                 Guard.State.CancelRelaxation();
                 state = State.Recovery;
                 stateUntil = Time.time + stunDuration;
+            }
+            // Do not chase a concealed target using its live position or react to its attacks.
+            if (SmokeCloud.Obscures(transform.position, TargetTransform.position) && !Rolling)
+            {
+                InterruptAttack();
+                Guard.Tick(false, facing);
+                return;
             }
             Vector3 delta = Vector3.ProjectOnPlane(TargetTransform.position - transform.position, Vector3.up);
             targetMoving = (TargetTransform.position - lastObservedTargetPosition).magnitude / Mathf.Max(.001f, Time.deltaTime) > 2;
@@ -344,9 +386,10 @@ namespace Parry
                 Guard.Tick(CanGuard, facing);
                 return;
             }
-            bool defending = CanGuard && !TargetUnblockable && TargetThreatening
-                && (TargetAttackReleased || !tactics.ExploitingWeakness && state != State.Windup)
+            bool defending = CanGuard && EnemyTactics.ShouldDefend(TargetThreatening, TargetAttackReleased,
+                tactics.ExploitingWeakness, state == State.Windup && !TargetStrikeImminent)
                 && delta.magnitude <= TargetReach + .3f && HasLineOfSight(delta);
+            if (defending && TryEvadeChargedStrike(delta)) return;
             if (defending)
                 PrepareDefense(delta, newAttack);
             Guard.Tick(CanGuard && !(state == State.Retreat && Guard.State.Relaxing) && state != State.Windup
@@ -363,7 +406,16 @@ namespace Parry
             }
             // Keep the chosen defense instead of immediately replacing it with a
             // group attack, flank or aggressive follow-up in this same frame.
-            if (defending) return;
+            if (defending)
+            {
+                // Defense must not pin a recovering enemy inside the attacker's reach.
+                if (tactics.Retreating)
+                {
+                    if (state != State.Retreat) BeginRetreat();
+                    Retreat(delta);
+                }
+                return;
+            }
             if (TryCornerRoll(delta)) return;
             if (WindupOpening && !tactics.Retreating && Guard.State.CanAttack(Time.time)
                 && (state == State.Chase || state == State.Guard || state == State.Recovery && Time.time >= stateUntil)
@@ -759,6 +811,14 @@ namespace Parry
 
             rollRemaining = 0;
             Guard.State.CompleteRoll(Time.time);
+            if (Guard.Broken)
+            {
+                rollKnockedDown = true;
+                rollSlide = moved ? rollDirection * currentRollSpeed * .4f : Vector3.zero;
+                state = State.Recovery;
+                stateUntil = Time.time;
+                return;
+            }
             UpdateTactics(targetDelta);
             if (tactics.Retreating) BeginRetreat();
             else BeginGuard();
@@ -794,19 +854,43 @@ namespace Parry
             Guard.State.SetBlocking(true, Time.time);
         }
 
+        bool TryEvadeChargedStrike(Vector3 delta)
+        {
+            if (!ChargeEnabled || !TargetStrikeImminent || !CanStartRoll
+                || Vector3.Angle(TargetAttackHeading, -delta) > (player != null ? player.ThreatHalfAngle : opponent.CurrentHalfAngle) + 10)
+                return false;
+            float strength = TargetGuard.StrikeStrength;
+            float blockCost = (TargetGuard.Weapon == WeaponKind.Axe ? 140 : 28) * strength;
+            if (Guard.Pressure + blockCost * 100 / Mathf.Max(1, Guard.EndurancePoints) < 95) return false;
+            Vector3 lateral = Vector3.Cross(Vector3.up, delta.normalized);
+            float distance = rollSpeed * rollDuration;
+            foreach (Vector3 direction in new[] { lateral, -lateral, -delta.normalized })
+            {
+                if (!health.CanMove(direction * distance) || !BeginRoll(direction, distance, false)) continue;
+                attackCharge.Cancel();
+                Guard.Tick(false, facing, rolling: true);
+                return true;
+            }
+            return false;
+        }
+
         void PrepareDefense(Vector3 towardAttack, bool newAttack)
         {
             if (!CanGuard) return;
-            bool emergency = state == State.Windup || (state == State.Recovery && Time.time < stateUntil)
+            bool emergency = Guard.State.GuardReadinessDelayed || state == State.Windup || (state == State.Recovery && Time.time < stateUntil)
                 || (towardAttack.sqrMagnitude > .001f && Vector3.Angle(facing, towardAttack) > 70);
-            if (newAttack) Guard.State.SetBlocking(false, Time.time);
+            // Do not restart a slow guard raise when the held attack is released.
+            if (newAttack && !Guard.State.GuardTransition) Guard.State.SetBlocking(false, Time.time);
             if (emergency)
             {
                 attackCharge.Cancel();
                 slashSequence.Reset();
                 Guard.State.CompleteStrongAttack(Time.time);
                 performingLunge = performingSweep = false;
-                Guard.State.TryEmergencyGuard(emergencyGuardPressure, Time.time);
+                // Cancelling a held windup is the same action available to the player.
+                // Its attack cost was already paid; do not charge an extra emergency turn.
+                float defenseCost = ChargeEnabled && state == State.Windup ? 0 : emergencyGuardPressure;
+                Guard.State.TryEmergencyGuard(defenseCost, Time.time, immediate: true);
                 state = State.Guard;
                 stateUntil = Time.time + GuardWait;
                 comboRemaining = 0;
@@ -848,13 +932,13 @@ namespace Parry
                 comboRemaining = 0;
                 if (defense == DefenseResult.Parry)
                 {
-                    tactics.RecordParry(Time.time, counterattackDelayAfterParry);
+                    tactics.RecordParry(Time.time, ChargeEnabled ? Mathf.Min(.2f, counterattackDelayAfterParry) : counterattackDelayAfterParry);
                     state = State.Guard;
                     stateUntil = tactics.AttackBlockedUntil;
                 }
                 else
                 {
-                    tactics.RecordBlock(Time.time, counterattackDelayAfterBlock);
+                    tactics.RecordBlock(Time.time, ChargeEnabled ? Mathf.Min(.35f, counterattackDelayAfterBlock) : counterattackDelayAfterBlock);
                     BeginGuard();
                     stateUntil = Mathf.Max(stateUntil, tactics.AttackBlockedUntil);
                 }
@@ -887,14 +971,16 @@ namespace Parry
                 : state == State.Recovery && Time.time - lastSwingAt < recoveryDuration
                 ? Mathf.Clamp01((Time.time - lastSwingAt) / CurrentActive) : -1;
             float returnToReady = Mathf.Clamp01((Time.time - lastSwingAt - CurrentActive) / Mathf.Max(.01f, recoveryDuration - CurrentActive));
-            weapon.Pose(facing, health.IsAlive && !Rolling, Guard.Blocking, Guard.Disrupted, swing, prepare,
+            weapon.Pose(facing, health.IsAlive && !Rolling && !rollKnockedDown, Guard.Blocking, Guard.Disrupted, swing, prepare,
                 AttackReach, performingLunge ? 20 : CurrentHalfAngle, returnToReady, CircularAttacks && !PerformingPowerful,
                 lunge: performingLunge, powerful: PerformingPowerful, thrustStance: performingLunge, relaxing: Guard.State.Relaxing, slashDirection: slashSequence.Direction);
             weapon.ChargeGlint(prepare, PerformingPowerful && state == State.Windup);
             if (!health.IsAlive || visual == null) return;
             Camera camera = Camera.main;
-            DemoArt.FaceCharacter(visual, frontSprite, frontMaterial, camera, Rolling ? rollDirection : facing);
-            float side = Vector3.Dot(facing, camera.transform.right);
+            Vector3 bodyDirection = swing >= 0 && !performingLunge && (CircularAttacks || performingSweep)
+                ? WeaponVisual.SpinFacing(facing, swing, slashSequence.Direction) : facing;
+            DemoArt.FaceCharacter(visual, frontSprite, frontMaterial, camera, Rolling ? rollDirection : bodyDirection);
+            float side = Vector3.Dot(bodyDirection, camera.transform.right);
             float thrust = swing >= 0 ? Mathf.Sin(Mathf.Pow(swing, .55f) * Mathf.PI) : 0;
             float tension = Mathf.SmoothStep(0, 1, Mathf.Clamp01(prepare / .78f));
             visual.flipX = side < 0;
@@ -904,9 +990,20 @@ namespace Parry
             visual.transform.localScale = Rolling ? new Vector3(1.1f, .7f, 1)
                 : state == State.Windup ? new Vector3(1.15f, .9f, 1) : Vector3.one;
             visual.transform.rotation = camera.transform.rotation * (Rolling
-                ? Quaternion.Euler(0, 0, -360 * (1 - rollRemaining / rollDuration))
+                ? Quaternion.Euler(0, 0, (Guard.Pressure >= 100 ? -270 : -360) * RollProgress)
                 : Quaternion.Euler(0, side * 18, side * slashSequence.Direction * (tension * 13 - thrust * 15)));
+            if (Rolling && Guard.Pressure >= 100)
+                visual.transform.localPosition -= Vector3.up * (.53f * Mathf.SmoothStep(0, 1, Mathf.InverseLerp(.65f, 1, RollProgress)));
+            if (rollKnockedDown)
+            {
+                visual.transform.rotation = camera.transform.rotation * Quaternion.Euler(0, 0, -270);
+                visual.transform.localPosition = Vector3.up * .32f;
+                visual.transform.localScale = new Vector3(1.1f, .7f, 1);
+            }
         }
+
+        Vector3 smokeEscape;
+        float nextSmokeEscapeAt;
 
         bool HasLineOfSight(Vector3 delta)
         {

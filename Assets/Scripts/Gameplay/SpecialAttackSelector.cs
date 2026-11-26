@@ -59,7 +59,7 @@ namespace Parry
 
     public static class PowerfulSweep
     {
-        public const float HalfAngle = 120;
+        public const float HalfAngle = 180;
         public const float Windup = .9f;
         public const float ActiveTime = .24f;
         public const float Recovery = .6f;

@@ -9,6 +9,30 @@ void Check(bool condition, string description)
 }
 void Near(float actual, float expected, string description) => Check(Math.Abs(actual - expected) < .01f, description);
 
+// Fresh WASD presses shorten both balance breaks and recoil without restoring resources.
+var struggling = new PostureState();
+Check(!struggling.TryStruggle(0), "Movement input cannot bank recovery before a stun");
+struggling.AddPressure(100, 1);
+Check(struggling.TryStruggle(1.1f), "A fresh movement press helps recover from a balance break");
+Check(!struggling.TryStruggle(1.1f), "Simultaneous movement keys count as one recovery effort");
+Check(!struggling.TryStruggle(1.14f), "Movement recovery has a bounded press rate");
+Near(struggling.Pressure, 100, "Struggling does not restore concentration");
+Check(struggling.Broken(2.12f) && !struggling.Broken(2.14f), "One recovery press shortens the break by 0.12 seconds");
+Check(!struggling.TryStruggle(2.3f), "Recovery input does nothing after the stun ends");
+var repeatedStruggle = new PostureState();
+repeatedStruggle.AddPressure(100, 0);
+for (int i = 0; i < 7; i++) repeatedStruggle.TryStruggle(i * .1f);
+Check(!repeatedStruggle.Disrupted(.65f), "Repeated presses allow early recovery");
+var recoilStruggle = new PostureState();
+recoilStruggle.Recoil(0);
+Check(recoilStruggle.TryStruggle(.1f), "Movement effort also shortens recoil");
+Check(!recoilStruggle.Disrupted(.24f), "Recoil respects the reduced deadline");
+recoilStruggle.Reset();
+recoilStruggle.Recoil(.11f);
+Check(recoilStruggle.TryStruggle(.12f), "Respawn clears the recovery press cooldown");
+recoilStruggle.DelayAttacks(1, .12f);
+Check(!recoilStruggle.CanAttack(.5f), "Struggling cannot bypass a separate attack cooldown");
+
 void ChargeStrongAttack(PostureState state)
 {
     for (int i = 0; i < PostureState.MaximumWarmup; i++) state.RecordOrdinaryContact();
@@ -23,6 +47,11 @@ Check(WeaponStyleOptions.ForWeapon(WeaponKind.Axe, WeaponStyle.Sweeping).StrongA
     "Axe retains key 3 sweep");
 Check(!WeaponStyleOptions.ForWeapon(WeaponKind.Axe, WeaponStyle.Normal).CanGuard,
     "Axe options disable guard");
+Check(EnemyTactics.ShouldDefend(false, true, true, true), "Released strike overrides an enemy counterattack opening and windup");
+Check(EnemyTactics.ShouldDefend(true, true, false, false), "Released powerful strike requires defense too");
+Check(EnemyTactics.ShouldDefend(true, false, false, false), "Visible windup keeps an idle enemy guarding");
+Check(!EnemyTactics.ShouldDefend(false, false, false, false), "No attack does not pin enemy in defense");
+Check(!EnemyTactics.ShouldDefend(true, false, true, true), "Unreleased held windup can still be punished");
 Check(EnemyTactics.CanPunishWindup(.8f, .24f, .1f), "Enemy can punish the beginning of an axe windup");
 Check(!EnemyTactics.CanPunishWindup(.21f, .24f, .1f), "A normal sword windup remains an immediate threat");
 Check(!EnemyTactics.CanPunishWindup(.3f, .24f, .1f), "Enemy defends when the axe strike is close");
@@ -446,7 +475,7 @@ timedDefender.Parry(12.8f);
 timedDefender.AddPressure(28, 12.9f);
 Check(timedDefender.Broken(12.9f), "An ordinary block after parry exhaustion still breaks balance");
 timedDefender.Tick(.1f, 14.2f);
-Near(timedDefender.Pressure, 100, "Ending a break preserves load until normal recovery resumes");
+Near(timedDefender.Pressure, 85, "Ending an exhaustion break gradually releases concentration");
 timedDefender.ConfigureEndurance(200);
 timedDefender.Parry(20, true);
 Near(timedDefender.RemainingEndurance, 120, "Powerful parry spends eighty actual points with configured endurance");
@@ -639,13 +668,13 @@ attacker.Tick(.5f, 3.5f);
 Near(attacker.Pressure, 100, "Broken pressure stays visible for the full stun");
 Check(!attacker.Broken(4), "Break expires after 1.25 seconds");
 attacker.Tick(.01f, 4);
-Near(attacker.Pressure, 100, "Regaining balance does not instantly restore concentration");
+Near(attacker.Pressure, 98.5f, "Regaining balance begins gradual exhaustion relief");
 attacker.Tick(.1f, 4.8f);
-Near(attacker.Pressure, 92.8f, "Post-break concentration decreases at the normal recovery rate");
+Near(attacker.Pressure, 76.3f, "Exit relief and passive recovery both reduce post-break load");
 attacker.Tick(.1f, 4.9f);
-Near(attacker.Pressure, 85.6f, "Post-break recovery continues smoothly over successive frames");
+Near(attacker.Pressure, 59.2f, "Exit relief completes while passive recovery respects load zones");
 attacker.AddPressure(5, 5);
-Near(attacker.Pressure, 90.6f, "New pressure after a break cannot trigger a hidden load reset");
+Near(attacker.Pressure, 64.2f, "New pressure after completed exit relief is retained");
 var exhaustedAgain = new PostureState();
 exhaustedAgain.AddPressure(100, 10);
 exhaustedAgain.AddPressure(1, 11.3f);
@@ -896,20 +925,20 @@ fighting.AddPressure(70, 0);
 fighting.Tick(1, 1);
 fighting.AddPressure(100, 1);
 fighting.Tick(.1f, 2.3f);
-Near(fighting.Pressure, 100, "Ending a break cannot reset concentration load");
+Near(fighting.Pressure, 85, "Ending a break releases only the animated portion of load");
 for (int step = 0; step < 10; step++)
 {
     float now = 3 + step * .5f;
     fighting.Deflect(now);
     fighting.Tick(.5f, now);
 }
-Near(fighting.Pressure, 100, "Continuous parries never restore load");
+Near(fighting.Pressure, 70, "Combat prevents passive recovery after exit relief finishes");
 fighting.SetBlocking(false, 8);
 fighting.RecordCombat(8);
 fighting.Tick(.1f, 9.9f);
-Near(fighting.Pressure, 100, "Starting an attack also prevents passive recovery");
+Near(fighting.Pressure, 70, "Starting an attack also prevents passive recovery");
 fighting.Tick(.1f, 10.1f);
-Near(fighting.Pressure, 92.8f, "Concentration recovers gradually after genuine rest");
+Near(fighting.Pressure, 64.9f, "Concentration recovers gradually after genuine rest");
 var roller = new PostureState();
 roller.SetBlocking(true, 10);
 Check(roller.TrySpendForRoll(20, 10), "A roll can spend available concentration");
@@ -1012,9 +1041,9 @@ Check(!heavyAttacker.TrySpendForStrongAttack(390, 9.2f), "An existing stagger st
 heavyAttacker.CompleteStrongAttack(10);
 Check(!heavyAttacker.Broken(10.42f), "Completing the same strike twice cannot extend its stagger");
 heavyAttacker.Tick(.1f, 10.42f);
-Near(heavyAttacker.Pressure, 100, "Exhausting strike cannot instantly recover concentration after its stagger");
+Near(heavyAttacker.Pressure, 85, "Exhausting strike begins animated relief after its stagger");
 heavyAttacker.Tick(.1f, 11.3f);
-Near(heavyAttacker.Pressure, 92.8f, "Exhausting strike uses gradual post-break recovery");
+Near(heavyAttacker.Pressure, 64.9f, "Exhausting strike completes relief alongside gradual passive recovery");
 heavyAttacker.ConfigureEndurance(400);
 ChargeStrongAttack(heavyAttacker);
 Check(heavyAttacker.TrySpendForStrongAttack(390, 20), "An affordable strike spends its full cost");
@@ -1107,5 +1136,66 @@ selector.Begin(normal);
 Check(selector.Begin(thrust) == AttackChoice.Lunge && selector.Release() == AttackChoice.None, "Powerful press clears pending normal release input");
 Check(selector.Begin(new WeaponStyleOptions(AttackChoice.None, AttackChoice.None, false)) == AttackChoice.None,
     "An unavailable action cannot execute");
+
+
+
+var delayedWalkingGuard = new PostureState();
+delayedWalkingGuard.ConfigureEndurance(1000);
+delayedWalkingGuard.BeginRelaxation(29);
+delayedWalkingGuard.LeaveRelaxation();
+Check(!delayedWalkingGuard.TryEmergencyGuard(45, 29.01f), "Normal guard retains the post-rest delay that exposed walking enemies");
+var exhaustedEmergencyGuard = new PostureState();
+exhaustedEmergencyGuard.BeginRelaxation(29);
+exhaustedEmergencyGuard.AddPressure(60, 29);
+Check(!exhaustedEmergencyGuard.TryEmergencyGuard(45, 29.01f, immediate: true), "Instant emergency guard still fails when concentration cannot pay");
+var stunnedEmergencyGuard = new PostureState();
+stunnedEmergencyGuard.Recoil(29);
+Check(!stunnedEmergencyGuard.TryEmergencyGuard(45, 29.01f, immediate: true), "Instant emergency guard does not erase recoil");
+
+// Walking out of a rest retains a hidden readiness penalty; emergency guard must
+// pay for removing it before a lethal ordinary strike is resolved in the same frame.
+foreach (int readiness in new[] { 0, 1, 2 })
+{
+    var restedEnemy = new PostureState();
+    restedEnemy.ConfigureEndurance(1000);
+    restedEnemy.BeginRelaxation(30);
+    if (readiness == 1) restedEnemy.LeaveRelaxation();
+    if (readiness == 2) restedEnemy.SetBlocking(true, 30);
+    Check(restedEnemy.GuardReadinessDelayed, "Rest readiness penalty remains observable for enemy defense");
+    Check(restedEnemy.TryEmergencyGuard(45, 30.01f, immediate: true), "Healthy enemy immediately guards after resting");
+    Check(restedEnemy.Blocking && !restedEnemy.GuardReadinessDelayed, "Emergency guard clears every pending readiness state");
+    Near(restedEnemy.RemainingEndurance, 955, "Instant emergency readiness costs concentration once");
+}
+
+var exhaustionExit = new PostureState();
+exhaustionExit.ConfigureEndurance(1000);
+exhaustionExit.AddPressure(1000, 10);
+exhaustionExit.Tick(.1f, 11);
+Near(exhaustionExit.Pressure, 100, "Full concentration stays full during exhaustion stun");
+exhaustionExit.Tick(.05f, 11.3f);
+Near(exhaustionExit.Pressure, 92.5f, "Exhaustion exit starts a fast gradual concentration drop");
+exhaustionExit.Tick(.15f, 11.45f);
+Near(exhaustionExit.Pressure, 70, "Exhaustion exit releases thirty percentage points");
+exhaustionExit.Tick(.1f, 11.55f);
+Near(exhaustionExit.Pressure, 70, "Exit relief applies once before ordinary recovery");
+var forcedBreakExit = new PostureState();
+forcedBreakExit.ConfigureEndurance(1000);
+forcedBreakExit.Block(10, true);
+forcedBreakExit.Tick(.2f, 11.3f);
+Near(forcedBreakExit.Pressure, 2.8f, "Powerful block without full concentration does not grant exhaustion relief");
+var strongExhaustionExit = new PostureState();
+strongExhaustionExit.RecordSuccessfulParry();
+strongExhaustionExit.RecordSuccessfulParry();
+Check(strongExhaustionExit.TrySpendForStrongAttack(100, 10), "Strong attack can defer exhaustion until its finish");
+strongExhaustionExit.CompleteStrongAttack(10.1f);
+strongExhaustionExit.Tick(.2f, 11.4f);
+Near(strongExhaustionExit.Pressure, 70, "Deferred strong attack exhaustion grants the same exit relief");
+var resetExhaustion = new PostureState();
+resetExhaustion.AddPressure(100, 10);
+resetExhaustion.Reset();
+resetExhaustion.AddPressure(40, 11);
+resetExhaustion.Tick(.2f, 11.3f);
+Near(resetExhaustion.Pressure, 40, "Reset clears pending exhaustion relief");
+
 if (failures > 0) { Console.Error.WriteLine($"{failures} of {assertions} assertions failed"); Environment.Exit(1); }
 Console.WriteLine($"PASS: {assertions} combat rule assertions");

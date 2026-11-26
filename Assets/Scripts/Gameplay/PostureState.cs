@@ -68,6 +68,7 @@ namespace Parry
         public bool Blocking { get; private set; }
         public bool Relaxing { get; private set; }
         public bool GuardTransition { get; private set; }
+        public bool GuardReadinessDelayed => Relaxing || slowExitPending || GuardTransition;
         public const float RelaxedGuardRaiseDuration = .2f;
         bool slowExitPending;
         float relaxedGuardReadyAt;
@@ -97,6 +98,18 @@ namespace Parry
             attacksBlockedUntil = Math.Max(attacksBlockedUntil, now + Math.Max(0, duration));
         public bool Broken(float now) => now < brokenUntil;
         public bool Disrupted(float now) => Broken(now) || now < recoilUntil;
+        public const float StruggleReduction = .12f;
+        public const float StrugglePressInterval = .08f;
+        float lastStrugglePress = float.NegativeInfinity;
+        // Called only for fresh movement-key presses, never for a held key.
+        public bool TryStruggle(float now)
+        {
+            if (!Disrupted(now) || now - lastStrugglePress < StrugglePressInterval) return false;
+            lastStrugglePress = now;
+            brokenUntil = Math.Max(now, brokenUntil - StruggleReduction);
+            recoilUntil = Math.Max(now, recoilUntil - StruggleReduction);
+            return true;
+        }
         public bool CanParry(float now, float windowScale = 1) => Blocking && now < guardRaisedAt + (parryUntil - guardRaisedAt) * windowScale && !Disrupted(now);
         public const float EarlyGuardGrace = .2f;
         bool parryArmed, anticipatedAttack;
@@ -150,8 +163,14 @@ namespace Parry
             Pressure = Math.Min(Maximum, Pressure + NormalizeCost(amount));
             if (Pressure >= Maximum) BreakBalance(now);
         }
+        public const float ExhaustionRelief = 30;
+        public const float ExhaustionReliefDuration = .2f;
+        bool exhaustionReliefPending;
+        float exhaustionReliefRemaining;
         void BreakBalance(float now)
         {
+            exhaustionReliefPending |= Pressure >= Maximum;
+            exhaustionReliefRemaining = 0;
             brokenUntil = Math.Max(brokenUntil, now + 1.25f);
             Blocking = false;
             CancelRelaxation();
@@ -176,9 +195,11 @@ namespace Parry
             parryArmed = false;
         }
         public void Recoil(float now) { CancelRelaxation(); RecordCombat(now); recoilUntil = Math.Max(recoilUntil, now + .35f); Blocking = false; }
-        public bool TryEmergencyGuard(float pressureCost, float now)
+        public bool TryEmergencyGuard(float pressureCost, float now, bool immediate = false)
         {
             if (Disrupted(now)) return false;
+            // An emergency recovery spends concentration to skip the normal slow raise.
+            if (immediate && GuardReadinessDelayed) CancelRelaxation();
             if (GuardTransition) { SetBlocking(true, now); return Blocking; }
             AddPressure(pressureCost, now);
             SetBlocking(true, now);
@@ -214,8 +235,7 @@ namespace Parry
             strongAttackBreakPending = false;
             RecordCombat(now);
             Pressure = Maximum;
-            Blocking = false;
-            brokenUntil = Math.Max(brokenUntil, now + 1.25f);
+            BreakBalance(now);
         }
         bool TrySpendConcentration(float pressureCost, float now)
         {
@@ -232,6 +252,17 @@ namespace Parry
             float elapsed = Math.Max(0, deltaTime);
             bool resting = now > recoverAfter && !Disrupted(now) && !strongAttackBreakPending;
             if (Broken(now)) return;
+            if (exhaustionReliefPending)
+            {
+                exhaustionReliefPending = false;
+                exhaustionReliefRemaining = Math.Min(Pressure, ExhaustionRelief);
+            }
+            if (exhaustionReliefRemaining > 0)
+            {
+                float relief = Math.Min(exhaustionReliefRemaining, ExhaustionRelief / ExhaustionReliefDuration * elapsed);
+                Pressure = Math.Max(0, Pressure - relief);
+                exhaustionReliefRemaining -= relief;
+            }
             if (resting)
                 Recover(NormalizeCost((Blocking ? 28 : 18) * elapsed * (Relaxing ? 2.5f : 1)));
         }
@@ -251,6 +282,9 @@ namespace Parry
         public void Reset()
         {
             Warmup = 0;
+            exhaustionReliefPending = false;
+            exhaustionReliefRemaining = 0;
+            lastStrugglePress = float.NegativeInfinity;
             Pressure = brokenUntil = recoilUntil = parryUntil = nextParry = recoverAfter = attacksBlockedUntil = 0;
             Blocking = false;
             strongAttackBreakPending = parryArmed = anticipatedAttack = false;

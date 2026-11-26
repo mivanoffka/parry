@@ -25,10 +25,8 @@ namespace Parry
                 if (defeated) Acquire();
             }
             var keyboard = Keyboard.current;
-            var mouse = Mouse.current;
             var pad = Gamepad.current;
             if ((keyboard != null && keyboard.tabKey.wasPressedThisFrame)
-                || (mouse != null && mouse.middleButton.wasPressedThisFrame)
                 || (pad != null && pad.rightStickButton.wasPressedThisFrame))
             {
                 if (Target != null) Clear();

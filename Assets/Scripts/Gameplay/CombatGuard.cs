@@ -212,6 +212,7 @@ namespace Parry
             bool alive = player != null ? player.IsAlive : target != null && target.IsAlive;
             bool markersVisible = alive && SmokeCloud.Exposure(transform.position) <= .01f;
             var enemy = GetComponent<EnemyBrain>();
+            if (player == null && SmokeCloud.PlayerObscured) markersVisible = false;
             AttackCharge charge = player != null ? player.Charge : enemy != null ? enemy.Charge : null;
             bool charging = player != null ? player.ChargeVisible : enemy != null && enemy.ChargeVisible;
             chargeBackground.enabled = markersVisible && charging;

@@ -32,6 +32,9 @@ namespace Parry
             if (targetOpen || targetBlocking) return chargeDuration + perfectWindow * .5f;
             return Math.Min(minimumWindup, chargeDuration * .65f);
         }
+        public static bool ShouldDefend(bool attackThreatening, bool attackReleased, bool exploitingOpening,
+            bool windingUp) => attackReleased || attackThreatening && !exploitingOpening && !windingUp;
+
         public const float HeldWindupReactionTime = .2f;
         public static bool ShouldPunishHeldWindup(float heldReadyDuration) => heldReadyDuration >= HeldWindupReactionTime;
         public static bool CanPunishWindup(float timeUntilStrike, float ownWindup, float ownActiveTime,
